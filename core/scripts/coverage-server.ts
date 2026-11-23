@@ -74,46 +74,91 @@ if (process.platform !== 'linux') {
     process.exitCode = 1;
   } else {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-server-coverage-'));
+    const baselineLcov = path.join(tempDir, 'baseline.lcov');
     const lcov = path.join(tempDir, 'coverage.lcov');
+    const emptyTest = path.join(tempDir, 'empty.test.ts');
+    fs.writeFileSync(emptyTest, "import 'node:test';\n");
     try {
-      const args = [
-        '--enable-source-maps',
-        '--import',
-        import.meta.resolve('tsx'),
-        ...modules.flatMap((file) => ['--import', pathToFileURL(file).href]),
-        '--test',
+      const coverageArgs = [
         '--experimental-test-coverage',
         '--test-coverage-include=src/server/**/*.ts',
         '--test-coverage-exclude=src/server/main.ts',
         '--test-coverage-exclude=src/**/*.test.ts',
-        `--test-coverage-lines=${LINES}`,
-        `--test-coverage-branches=${BRANCHES}`,
-        `--test-coverage-functions=${FUNCTIONS}`,
-        '--test-reporter=spec',
-        '--test-reporter-destination=stdout',
-        '--test-reporter=lcov',
-        `--test-reporter-destination=${lcov}`,
-        ...tests,
       ];
-      const result = spawnSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
-      let failed = result.status !== 0;
+      const baseline = spawnSync(
+        process.execPath,
+        [
+          '--enable-source-maps',
+          '--import',
+          import.meta.resolve('tsx'),
+          ...modules.flatMap((file) => ['--import', pathToFileURL(file).href]),
+          '--test',
+          ...coverageArgs,
+          '--test-reporter=lcov',
+          `--test-reporter-destination=${baselineLcov}`,
+          emptyTest,
+        ],
+        { cwd: root, stdio: 'inherit' },
+      );
+      let failed = baseline.status !== 0;
+      if (!fs.existsSync(baselineLcov)) {
+        console.error('Покрытие серверного модуля: не создан базовый LCOV');
+        failed = true;
+      }
 
+      const result = spawnSync(
+        process.execPath,
+        [
+          '--enable-source-maps',
+          '--import',
+          import.meta.resolve('tsx'),
+          '--test',
+          ...coverageArgs,
+          `--test-coverage-lines=${LINES}`,
+          `--test-coverage-branches=${BRANCHES}`,
+          `--test-coverage-functions=${FUNCTIONS}`,
+          '--test-reporter=spec',
+          '--test-reporter-destination=stdout',
+          '--test-reporter=lcov',
+          `--test-reporter-destination=${lcov}`,
+          ...tests,
+        ],
+        { cwd: root, stdio: 'inherit' },
+      );
+      failed = result.status !== 0 || failed;
+      if (!fs.existsSync(lcov)) {
+        console.error('Покрытие серверного модуля: не создан тестовый LCOV');
+        failed = true;
+      }
+
+      const records = new Map<string, CoverageRecord>();
       if (fs.existsSync(lcov)) {
         for (const record of parseLcov(fs.readFileSync(lcov, 'utf8'))) {
-          const lines = percent(record.LH, record.LF);
-          const branches = percent(record.BRH, record.BRF);
-          const functions = percent(record.FNH, record.FNF);
-          const below =
-            belowThreshold(record.LH, record.LF, LINES) ||
-            belowThreshold(record.BRH, record.BRF, BRANCHES) ||
-            belowThreshold(record.FNH, record.FNF, FUNCTIONS);
-          if (below) {
-            const file = path.isAbsolute(record.file) ? path.relative(root, record.file) : record.file;
-            console.error(
-              `Покрытие серверного модуля: файл ниже порога — ${file}: строки ${lines}%, ветви ${branches}%, функции ${functions}%`,
-            );
-            failed = true;
-          }
+          records.set(path.resolve(root, record.file), record);
+        }
+      }
+      if (fs.existsSync(baselineLcov)) {
+        for (const record of parseLcov(fs.readFileSync(baselineLcov, 'utf8'))) {
+          const file = path.resolve(root, record.file);
+          const executable = record.LF > 0 || record.BRF > 0 || record.FNF > 0;
+          if (executable && !records.has(file)) records.set(file, { ...record, LH: 0, BRH: 0, FNH: 0 });
+        }
+      }
+
+      for (const record of records.values()) {
+        const lines = percent(record.LH, record.LF);
+        const branches = percent(record.BRH, record.BRF);
+        const functions = percent(record.FNH, record.FNF);
+        const below =
+          belowThreshold(record.LH, record.LF, LINES) ||
+          belowThreshold(record.BRH, record.BRF, BRANCHES) ||
+          belowThreshold(record.FNH, record.FNF, FUNCTIONS);
+        if (below) {
+          const file = path.isAbsolute(record.file) ? path.relative(root, record.file) : record.file;
+          console.error(
+            `Покрытие серверного модуля: файл ниже порога — ${file}: строки ${lines}%, ветви ${branches}%, функции ${functions}%`,
+          );
+          failed = true;
         }
       }
       if (failed) process.exitCode = 1;
