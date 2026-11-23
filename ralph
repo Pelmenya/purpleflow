@@ -1,0 +1,90 @@
+#!/bin/sh
+# Launcher Ralph — шим, который потребитель кладёт в корень своего репозитория как `./ralph`.
+#
+#   RALPH_SOURCE=/path/to/ralph ./ralph install --rev <ревизия>   первая установка
+#   ./ralph install                установить ревизию из .ralph/core.lock (новая машина)
+#   ./ralph doctor                 проверки установки и совместимости без старта
+#   ./ralph start [--dry-run …]    старт петли из установленной ревизии
+#   ./ralph stop                   мягкая остановка на границе итерации
+#   ./ralph version                ревизия и версии слоёв
+#
+# Шим обновляется отдельно от ядра и передаёт свою версию через окружение.
+# После установки он переносит правила и скиллы закреплённой ревизии в проект.
+set -eu
+
+RALPH_LAUNCHER_VERSION=1
+export RALPH_LAUNCHER_VERSION
+
+here=$(cd "$(dirname "$0")" && pwd -P)
+
+if [ -n "${RALPH_DATA_DIR:-}" ]; then
+    data=$RALPH_DATA_DIR
+elif [ -n "${XDG_DATA_HOME:-}" ]; then
+    data=$XDG_DATA_HOME/ralph
+elif [ -n "${HOME:-}" ]; then
+    data=$HOME/.local/share/ralph
+else
+    echo "⛔ ./ralph: каталог установок не задан — нет ни RALPH_DATA_DIR, ни XDG_DATA_HOME, ни HOME." >&2
+    exit 1
+fi
+case $data in
+    /*) ;;
+    *)
+        echo "⛔ ./ralph: каталог установок $data не абсолютный." >&2
+        exit 1
+        ;;
+esac
+
+action=${1:-}
+if [ "$action" = start ]; then
+    dry_run=false
+    for arg in "$@"; do
+        [ "$arg" != --dry-run ] || dry_run=true
+    done
+    if [ "$dry_run" = false ]; then
+        node "$here/scripts/phase-attack.mjs" check "$@"
+    fi
+fi
+run_launcher() {
+    if [ "$action" = install ]; then
+        node "$@"
+        exec node "$here/scripts/install-ralph-assets.mjs" "$here" "$data"
+    fi
+    exec node "$@"
+}
+
+sha=
+lock=$here/.ralph/core.lock
+if [ -f "$lock" ]; then
+    sha=$(sed -n 's/^ *"sha": *"\([0-9a-f]*\)".*/\1/p' "$lock")
+    # Только полный SHA (40 или 64 hex). Иное — lock битый, и причину называет
+    # `parseCoreLock` launcher'а, а не совет «поставь ревизию» под чужим именем каталога.
+    if [ ${#sha} -ne 40 ] && [ ${#sha} -ne 64 ]; then
+        sha=
+    fi
+    if [ -z "$sha" ] && [ -n "${RALPH_SOURCE:-}" ]; then
+        run_launcher "$RALPH_SOURCE/launcher.mts" --consumer "$here" "$@"
+    fi
+    if [ -z "$sha" ]; then
+        echo "⛔ ./ralph: в $lock нет полного SHA ревизии — lock битый; почини его или верни из истории." >&2
+        exit 1
+    fi
+fi
+
+if [ -n "$sha" ] && [ -f "$data/$sha/launcher.mts" ]; then
+    if [ "$action" = install ] && [ -n "${RALPH_SOURCE:-}" ]; then
+        run_launcher "$data/$sha/launcher.mts" --consumer "$here" --source "$RALPH_SOURCE" "$@"
+    fi
+    run_launcher "$data/$sha/launcher.mts" --consumer "$here" "$@"
+fi
+
+if [ "$action" = install ] && [ -n "${RALPH_SOURCE:-}" ]; then
+    run_launcher "$RALPH_SOURCE/launcher.mts" --consumer "$here" --source "$RALPH_SOURCE" "$@"
+fi
+
+if [ -n "$sha" ]; then
+    echo "⛔ ./ralph: ревизии $sha из .ralph/core.lock нет в $data — поставь её: RALPH_SOURCE=<клон канона> ./ralph install" >&2
+else
+    echo "⛔ ./ralph: Ralph не установлен — RALPH_SOURCE=<клон канона> ./ralph install --rev <ревизия>" >&2
+fi
+exit 1

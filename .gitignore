@@ -7,3 +7,5 @@ release/
 *.tsbuildinfo
 e2e-results/
 e2e-report/
+.claude/local/
+.claude/ralph/ralph.config.json
