@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "sha": "fa528fafe8d233d8738c1891bd164875d5065ac4",
+  "treeHash": "sha256:c3ccaef6eb1ac92ccc0a3b32f9921640c9caded3200b7a5c97934e5b445febcb",
+  "versions": {
+    "launcher": 1,
+    "core": 1,
+    "config": 1,
+    "state": 2,
+    "adapters": 1
+  }
+}
