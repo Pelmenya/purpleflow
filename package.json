@@ -12,13 +12,14 @@
     "build": "npm run build -w @purpleflow/core && npm run build -w @purpleflow/app",
     "typecheck": "npm run typecheck -w @purpleflow/core && npm run typecheck -w @purpleflow/app",
     "test": "npm test -w @purpleflow/core && npm test -w @purpleflow/app",
+    "coverage:server": "npm run coverage:server -w @purpleflow/core",
     "test:e2e": "npm run test:e2e -w @purpleflow/app",
     "make-sample": "node scripts/make-sample.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm test",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run build:core && npm test && npm run coverage:server",
     "release": "node scripts/release.mjs"
   },
   "devDependencies": {

@@ -33,7 +33,9 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run format:check
+      - run: npm run build:core
       - run: npm test
+      - run: npm run coverage:server
 
   build:
     name: Build app
