@@ -44,6 +44,10 @@ function percent(hit: number, total: number) {
   return total === 0 ? 100 : Math.round((10000 * hit) / total) / 100;
 }
 
+function belowThreshold(hit: number, total: number, threshold: number) {
+  return total > 0 && 100 * hit < threshold * total;
+}
+
 if (process.platform !== 'linux') {
   console.log('Покрытие серверного модуля: пропущено — серверные тесты идут только на Linux');
 } else {
@@ -100,7 +104,9 @@ if (process.platform !== 'linux') {
           const branches = percent(record.BRH, record.BRF);
           const functions = percent(record.FNH, record.FNF);
           const below =
-            (record.LF > 0 && lines < LINES) || (record.BRF > 0 && branches < BRANCHES) || (record.FNF > 0 && functions < FUNCTIONS);
+            belowThreshold(record.LH, record.LF, LINES) ||
+            belowThreshold(record.BRH, record.BRF, BRANCHES) ||
+            belowThreshold(record.FNH, record.FNF, FUNCTIONS);
           if (below) {
             const file = path.isAbsolute(record.file) ? path.relative(root, record.file) : record.file;
             console.error(
