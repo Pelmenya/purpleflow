@@ -81,6 +81,42 @@ test('порог покрытия: модуль без тестов считае
   assert.match(result.output, /n\.ts/);
 });
 
+test('порог покрытия: модуль только с константами без тестов роняет проверку', linux, (t) => {
+  const dir = project(t);
+  write(dir, 'src/server/m.ts', MODULE);
+  write(dir, 'src/server/untested.ts', 'export const answer = 42;\n');
+  write(dir, 'src/server-m.test.ts', FULL_TEST);
+
+  const result = run(dir);
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /untested\.ts/);
+});
+
+test('порог покрытия: фактический недобор у границы роняет проверку', linux, (t) => {
+  const dir = project(t);
+  const functions = Array.from({ length: 20_000 }, (_, i) => `export const f${i} = () => ${i};`).join('\n');
+  const covered = Array.from({ length: 10 }, (_, i) => `export const f${i} = () => ${i};`).join('\n');
+  write(dir, 'src/server/big.ts', `${functions}\n`);
+  write(dir, 'src/server/covered.ts', `${covered}\n`);
+  write(
+    dir,
+    'src/server-big.test.ts',
+    `import { test } from 'node:test';
+import * as big from './server/big.js';
+import * as covered from './server/covered.js';
+
+test('покрытие', () => {
+  for (const fn of Object.values(big).slice(0, 16999)) fn();
+  for (const fn of Object.values(covered)) fn();
+});
+`,
+  );
+
+  const result = run(dir);
+  assert.equal(result.status, 1, result.output);
+  assert.match(result.output, /big\.ts/);
+});
+
 test('порог покрытия: полностью покрытый код проходит', linux, (t) => {
   const dir = project(t);
   write(dir, 'src/server/m.ts', MODULE);
