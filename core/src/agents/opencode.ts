@@ -151,7 +151,11 @@ const majors = new Map<string, Promise<number>>();
 export function opencodeMajor(bin: string, env: NodeJS.ProcessEnv): Promise<number> {
   let hit = majors.get(bin);
   if (!hit) {
-    hit = run(bin, ['--version'], { cwd: process.cwd(), env, timeoutMs: 15_000 }).then((r) => parseMajor(`${r.stdout}\n${r.stderr}`));
+    hit = run(bin, ['--version'], { cwd: process.cwd(), env, timeoutMs: 15_000 }).then((r) => {
+      const success = r.code === 0 && !r.killed && !r.timedOut && !r.spawnError;
+      if (!success && majors.get(bin) === hit) majors.delete(bin);
+      return success ? parseMajor(`${r.stdout}\n${r.stderr}`) : 1;
+    });
     majors.set(bin, hit);
   }
   return hit;

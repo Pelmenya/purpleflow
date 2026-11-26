@@ -1,8 +1,11 @@
 import spawn from 'cross-spawn';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ChildProcess } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import treeKill from 'tree-kill';
 import { trace } from './trace.js';
+
+export const spawnScope = new AsyncLocalStorage<{ stopped: boolean }>();
 
 export interface RunOptions {
   cwd: string;
@@ -173,6 +176,17 @@ function append(buf: string, chunk: string): string {
 }
 
 export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunResult> {
+  if (spawnScope.getStore()?.stopped)
+    return Promise.resolve({
+      code: null,
+      signal: null,
+      stdout: '',
+      stderr: '',
+      timedOut: false,
+      killed: false,
+      durationMs: 0,
+      spawnError: 'Служба останавливается',
+    });
   const started = Date.now();
   return new Promise((resolve) => {
     let child: ChildProcess;

@@ -26,6 +26,12 @@ export interface EngineHooks {
 
 const TOOLS_TTL_MS = 15_000;
 
+export class ShuttingDownError extends Error {
+  constructor() {
+    super('Служба останавливается');
+  }
+}
+
 export class Kernel {
   readonly store: RunStore;
   readonly prompts: Prompts;
@@ -62,6 +68,8 @@ export class Kernel {
   readonly envChecks = new Set<string>();
   /** Очередь прогонов сейчас разбирается. */
   pumping = false;
+  closing = false;
+  pending = 0;
   engine!: EngineHooks;
 
   constructor(readonly opts: CoreOptions) {
@@ -85,6 +93,7 @@ export class Kernel {
   }
 
   emit(e: CoreEvent) {
+    if (this.closing) return;
     for (const fn of this.listeners) {
       try {
         fn(e);
@@ -99,7 +108,13 @@ export class Kernel {
   }
 
   backgroundCurrent(id: string, token: number): boolean {
-    return !this.deleted.has(id) && !this.backgroundTeardown.has(id) && this.backgroundToken(id) === token && !!this.store.load(id);
+    return (
+      !this.closing &&
+      !this.deleted.has(id) &&
+      !this.backgroundTeardown.has(id) &&
+      this.backgroundToken(id) === token &&
+      !!this.store.load(id)
+    );
   }
 
   cancelBackground(id: string) {
@@ -119,7 +134,7 @@ export class Kernel {
   }
 
   save(run: RunFile) {
-    if (this.deleted.has(run.id)) return;
+    if (this.closing || this.deleted.has(run.id)) return;
     this.store.save(run);
     this.emit({ type: 'run.updated', run: structuredClone(run) });
   }
@@ -131,7 +146,7 @@ export class Kernel {
   }
 
   log(run: RunFile, text: string, convert = true) {
-    if (this.deleted.has(run.id)) return;
+    if (this.closing || this.deleted.has(run.id)) return;
     const t = convert ? crlf(text) : text;
     const hold = this.logHold.getStore();
     if (hold) {
@@ -169,6 +184,7 @@ export class Kernel {
 
   /** Общая обработка результата агента: токены, остановка, ошибка. */
   afterAgent(run: RunFile, a: StageAttempt, res: AgentResult) {
+    if (this.closing) throw new StopSignal();
     a.tokens = addUsage(a.tokens ?? emptyUsage(), res.usage);
     run.totals = addUsage(run.totals, res.usage);
     this.save(run);
@@ -177,10 +193,11 @@ export class Kernel {
   }
 
   checkStop(run: RunFile) {
-    if (this.stopping.has(run.id)) throw new StopSignal();
+    if (this.closing || this.stopping.has(run.id)) throw new StopSignal();
   }
 
   markStopped(run: RunFile, message: string, reason: FinishReason = 'user_stop') {
+    if (this.closing) return;
     for (const a of run.attempts)
       if (a.status === 'running' && !isGate(a.stage)) Object.assign(a, { status: 'stopped', endedAt: new Date().toISOString() });
     run.status = 'stopped';
@@ -191,6 +208,7 @@ export class Kernel {
   }
 
   fail(run: RunFile, error: string) {
+    if (this.closing) return;
     const stage = run.next;
     for (const a of run.attempts)
       if (a.status === 'running') Object.assign(a, { status: 'failed', endedAt: new Date().toISOString(), error });

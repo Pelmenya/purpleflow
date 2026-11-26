@@ -6,7 +6,7 @@ import { c, emptyUsage } from './agents/common.js';
 import { gateMessage, waitGate } from './gates.js';
 import { Git } from './git.js';
 import { makeChangeId, makeTitle, runBranch } from './ids.js';
-import type { Kernel } from './kernel.js';
+import { ShuttingDownError, type Kernel } from './kernel.js';
 import { RUN_VERSION } from './migrate.js';
 import { MODE_FIRST, MODE_LIMIT } from './modes.js';
 import { killGroup, killPid } from './proc.js';
@@ -33,9 +33,18 @@ import { traced } from './trace.js';
 import type { AgentKind, Efforts, GateId, ReviewTarget, Role, RunFile, StartRunInput } from './types.js';
 import { DEFAULT_AGENTS, effortFor, enabledAgent } from './types.js';
 
+function projectAllowed(k: Kernel, projectPath: string): boolean {
+  try {
+    return k.opts.allowProject?.(projectPath) ?? true;
+  } catch {
+    return false;
+  }
+}
+
 /** После перезапуска приложения: прогоны, оборванные посреди стадии, помечаются остановленными. */
 export async function recover(k: Kernel): Promise<void> {
   for (const s of k.store.list()) {
+    if (!projectAllowed(k, s.projectPath)) continue;
     // Агенты и тесты, пережившие аварийный выход приложения, не должны писать в worktree параллельно с повтором стадии.
     for (const group of runProcessGroups(s.id)) {
       const pids = k.store.readPids(group);
@@ -60,6 +69,7 @@ export async function recover(k: Kernel): Promise<void> {
           r.message = `Изменения прогона остались в git stash (${sha.slice(0, 8)}) — верните их: git stash apply ${sha.slice(0, 8)}`;
         });
     }
+    if (k.closing) return;
     for (const a of r.attempts) if (a.status === 'running') Object.assign(a, { status: 'stopped', endedAt: new Date().toISOString() });
     // Оборванная реализация — не вина исполнителя: попытку возвращаем.
     if (r.next === 'implement' && r.implAttemptsUsed > 0) r.implAttemptsUsed--;
@@ -83,6 +93,7 @@ export async function recover(k: Kernel): Promise<void> {
 }
 
 export async function start(k: Kernel, input: StartRunInput): Promise<string> {
+  if (!projectAllowed(k, input.projectPath)) throw new Error('Проект не допущен службой');
   const s = k.opts.getSettings();
   // Нужны только агенты, выбранные для ролей: на машине может стоять один claude или один codex.
   // Выключенный в настройках CLI роль не выполняет: она переходит на включённый, с его моделью по умолчанию.
@@ -170,6 +181,7 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
   // Агента визуальной проверки на машине может не быть — тогда проверка выключается, а не роняет прогон.
   const visual = Boolean(!review && input.visual && input.runCommand?.trim() && input.appUrl?.trim() && (await k.hasTool(visualAgent)));
   const queued = activeCount(k) >= maxParallel(k);
+  if (k.closing) throw new ShuttingDownError();
 
   const now = new Date().toISOString();
   const id = crypto.randomUUID();
@@ -238,12 +250,14 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
   k.preparing.add(run.id);
   try {
     await prepareWorkspace(k, run);
+    if (k.closing) return run.id;
     if (k.stopping.delete(run.id)) {
       k.markStopped(run, 'Остановлено пользователем');
       return run.id;
     }
   } catch (e) {
     k.stopping.delete(run.id);
+    if (k.closing) return run.id;
     // Рабочую копию создать не удалось (грязная копия, ветка уже есть…) — прогона нет, ошибка уходит в окно.
     k.store.forget(run.id);
     k.emit({ type: 'run.deleted', runId: run.id });
@@ -251,6 +265,7 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
   } finally {
     k.preparing.delete(run.id);
   }
+  if (k.closing) return run.id;
   void drive(k, run);
   return run.id;
 }
@@ -303,7 +318,7 @@ export function maxParallel(k: Kernel): number {
 
 /** Прогоны, в которых сейчас работают агенты. Ожидание решения человека место не занимает. */
 export function activeCount(k: Kernel): number {
-  return k.store.list().filter((r) => r.status === 'running').length;
+  return k.store.list().filter((r) => r.status === 'running' && projectAllowed(k, r.projectPath)).length;
 }
 
 /** Запустить из очереди столько прогонов, сколько есть свободных мест (старые — первыми). */
@@ -312,9 +327,10 @@ export async function pump(k: Kernel) {
   k.pumping = true;
   try {
     while (activeCount(k) < maxParallel(k)) {
+      if (k.closing) return;
       const next = k.store
         .list()
-        .filter((r) => r.status === 'queued')
+        .filter((r) => r.status === 'queued' && projectAllowed(k, r.projectPath))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
       if (!next) break;
       const run = k.store.load(next.id);
@@ -327,6 +343,7 @@ export async function pump(k: Kernel) {
 }
 
 export async function launchQueued(k: Kernel, run: RunFile) {
+  if (k.closing) return;
   run.status = 'running';
   run.message = undefined;
   k.save(run);
@@ -335,10 +352,10 @@ export async function launchQueued(k: Kernel, run: RunFile) {
     if (run.workspacePending) await prepareWorkspace(k, run);
     // Продолжение после перезапуска приложения: в режиме «ветка» проект могли переключить на другую ветку.
     else await ensureOnBranch(k, run);
-    if (k.deleted.has(run.id)) return;
+    if (k.closing || k.deleted.has(run.id)) return;
     if (k.stopping.delete(run.id)) return k.markStopped(run, 'Остановлено пользователем');
   } catch (e) {
-    if (k.deleted.has(run.id)) return;
+    if (k.closing || k.deleted.has(run.id)) return;
     if (k.stopping.delete(run.id)) return k.markStopped(run, 'Остановлено пользователем');
     run.status = 'stopped';
     run.message = `Не удалось начать прогон: ${(e as Error).message}`;
@@ -348,6 +365,7 @@ export async function launchQueued(k: Kernel, run: RunFile) {
   } finally {
     k.preparing.delete(run.id);
   }
+  if (k.closing) return;
   void drive(k, run);
 }
 
@@ -512,7 +530,7 @@ export async function skipChecks(k: Kernel, id: string) {
 }
 
 export async function drive(k: Kernel, run: RunFile) {
-  if (k.driving.has(run.id)) return;
+  if (k.closing || k.driving.has(run.id)) return;
   k.driving.add(run.id);
   k.live.set(run.id, run);
   k.stopping.delete(run.id);
@@ -587,6 +605,7 @@ export async function deleteRun(k: Kernel, id: string, deleteBranch: boolean) {
         `Проект сейчас на ветке ${r.branch} — переключитесь на другую (git checkout ${r.originalBranch ?? 'main'}), чтобы удалить её, или удалите прогон без ветки.`,
       );
   }
+  if (k.closing) throw new ShuttingDownError();
   k.deleted.add(id);
   k.cancelBackground(id);
   if (k.driving.has(id) || k.preparing.has(id)) k.stopping.add(id);

@@ -46,7 +46,7 @@ export function getManagerChat(k: Kernel, id: string): ManagerMessage[] {
 }
 
 function publish(k: Kernel, id: string, messages: ManagerMessage[]) {
-  if (k.deleted.has(id) || !k.store.load(id)) return;
+  if (k.closing || k.deleted.has(id) || !k.store.load(id)) return;
   k.store.writeChat(id, messages);
   k.emit({ type: 'manager.updated', runId: id, messages, thinking: k.managerBusy.has(id) });
 }

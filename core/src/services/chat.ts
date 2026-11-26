@@ -6,7 +6,7 @@ import { emptyUsage, type AgentResult, type AgentStep } from '../agents/common.j
 import { isImageFile } from '../files.js';
 import { Git } from '../git.js';
 import { writeFiles } from './attachments.js';
-import type { Kernel } from '../kernel.js';
+import { ShuttingDownError, type Kernel } from '../kernel.js';
 import { killGroup } from '../proc.js';
 import { writeAtomic } from '../store.js';
 import { applyStep, partsText, settleParts, type ChatAnswer } from '../chatparts.js';
@@ -87,7 +87,7 @@ function must(k: Kernel, id: string): ChatFile {
 const deleted = new Set<string>();
 
 function save(k: Kernel, chat: ChatFile) {
-  if (deleted.has(chat.id)) return;
+  if (k.closing || deleted.has(chat.id)) return;
   chat.updatedAt = new Date().toISOString();
   writeAtomic(chatFile(k, chat.id), JSON.stringify(chat, null, 2));
   k.emit({ type: 'chat.updated', chat: structuredClone(chat), busy: k.chatBusy.has(chat.id) });
@@ -350,6 +350,7 @@ async function drive(k: Kernel, chat: ChatFile, compact = false): Promise<void> 
     if (compact) await turn(k, chat, [], true);
     // Пока есть очередь — ход за ходом: сообщения, присланные во время ответа, уходят следующим ходом.
     for (;;) {
+      if (k.closing) break;
       const batch = chat.messages.filter((m) => m.queued);
       if (!batch.length || !liveOf(k).has(id)) break;
       await turn(k, chat, batch);
@@ -430,6 +431,7 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
     // Агент чата мог быть выключен в настройках — отвечает включённый, со своей моделью по умолчанию.
     const agent = enabledAgent(s, chat.agent);
     const tools = await k.tools([agent]);
+    if (k.closing) throw new ShuttingDownError();
     const cwd = chat.projectPath ?? path.join(chatFilesDir(k, id), 'work');
     fs.mkdirSync(cwd, { recursive: true });
     // Что изменилось за ход — только для чата с правками в git-репозитории.

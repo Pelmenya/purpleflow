@@ -111,20 +111,25 @@ export async function listOpencodeModels(k: Kernel, dir?: string): Promise<strin
   // opencode 2 без --standalone поднял бы фоновый сервис и оставил его работать.
   const list = opencodeMajor(bin, env)
     .then((major) => run(bin, major >= 2 ? ['models', '--standalone'] : ['models'], { cwd, env, timeoutMs: 30_000 }))
-    .then((r) =>
-      r.code === 0
-        ? [
-            ...new Set(
-              stripAnsi(r.stdout)
-                .split('\n')
-                .map((l) => l.trim())
-                .filter((l) => /^[\w.-]+\/\S+$/.test(l)),
-            ),
-          ]
-        : [],
-    );
+    .then((r) => {
+      const success = r.code === 0 && !r.killed && !r.timedOut && !r.spawnError;
+      if (!success) {
+        if (modelsCache.get(key)?.list === list) modelsCache.delete(key);
+        return [];
+      }
+      return [
+        ...new Set(
+          stripAnsi(r.stdout)
+            .split('\n')
+            .map((l) => l.trim())
+            .filter((l) => /^[\w.-]+\/\S+$/.test(l)),
+        ),
+      ];
+    });
   modelsCache.set(key, { at: Date.now(), list });
-  list.catch(() => modelsCache.delete(key));
+  list.catch(() => {
+    if (modelsCache.get(key)?.list === list) modelsCache.delete(key);
+  });
   return list;
 }
 
@@ -142,19 +147,24 @@ export async function listAgyModels(k: Kernel): Promise<string[]> {
   if (hit && Date.now() - hit.at < 60_000) return hit.list;
   for (const [x, v] of modelsCache) if (Date.now() - v.at >= 60_000) modelsCache.delete(x);
   const env = prependPath(k.opts.env, path.dirname(bin));
-  const list = run(bin, ['models'], { cwd: os.homedir(), env, timeoutMs: 60_000 }).then((r) =>
-    r.code === 0
-      ? [
-          ...new Set(
-            stripAnsi(r.stdout)
-              .split('\n')
-              .map((l) => l.split('\t')[0].trim())
-              .filter((l) => /^[\w.-]+$/.test(l)),
-          ),
-        ]
-      : [],
-  );
+  const list = run(bin, ['models'], { cwd: os.homedir(), env, timeoutMs: 60_000 }).then((r) => {
+    const success = r.code === 0 && !r.killed && !r.timedOut && !r.spawnError;
+    if (!success) {
+      if (modelsCache.get(key)?.list === list) modelsCache.delete(key);
+      return [];
+    }
+    return [
+      ...new Set(
+        stripAnsi(r.stdout)
+          .split('\n')
+          .map((l) => l.split('\t')[0].trim())
+          .filter((l) => /^[\w.-]+$/.test(l)),
+      ),
+    ];
+  });
   modelsCache.set(key, { at: Date.now(), list });
-  list.catch(() => modelsCache.delete(key));
+  list.catch(() => {
+    if (modelsCache.get(key)?.list === list) modelsCache.delete(key);
+  });
   return list;
 }
