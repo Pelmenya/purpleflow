@@ -303,7 +303,7 @@ export async function main(argv: string[]): Promise<void> {
     });
     if (signaled) await finish();
   } catch (error) {
-    report(error);
+    if (starting === undefined) report(error);
     await finish();
   }
 }
