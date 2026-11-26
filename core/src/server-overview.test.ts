@@ -145,7 +145,9 @@ test('обзор: две сессии видят одинаковую непус
   const { origin, run } = await overviewFixture(t);
   const first = new CookieJar();
   const second = new CookieJar();
-  assert.equal((await first.login(origin)).status, 303);
+  const firstLogin = await first.login(origin);
+  assert.equal(firstLogin.status, 303);
+  assert.match(firstLogin.headers.get('set-cookie') ?? '', /^pf_session=[\w-]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=43200$/);
   assert.equal((await second.login(origin)).status, 303);
 
   const firstResponse = await first.request(origin, '/api/overview');
@@ -236,7 +238,7 @@ test('обзор: название прогона с <script> выводится
 });
 
 test('обзор: неизвестный путь 404, неподдерживаемый метод 405, ядро не вызвано', linux, async (t) => {
-  const { host, origin } = await overviewFixture(t);
+  const { host, origin, run } = await overviewFixture(t);
   let coreCalls = 0;
   const snapshot = host.snapshot.bind(host);
   host.snapshot = async () => {
@@ -248,10 +250,19 @@ test('обзор: неизвестный путь 404, неподдержива�
 
   const missing = await jar.request(origin, '/missing');
   assert.equal(missing.status, 404);
-  const wrongMethod = await jar.request(origin, '/', { method: 'POST', headers: { Origin: PUBLIC_ORIGIN } });
-  assert.equal(wrongMethod.status, 405);
-  const wrongLoginMethod = await jar.request(origin, '/login', { method: 'PUT' });
-  assert.equal(wrongLoginMethod.status, 405);
+  assert.equal(missing.headers.get('allow'), null);
+  const wrongMethods = [
+    { route: '/', allow: 'GET' },
+    { route: '/api/overview', allow: 'GET' },
+    { route: `/runs/${run.id}`, allow: 'GET' },
+    { route: '/login', allow: 'GET, POST' },
+    { route: '/logout', allow: 'POST' },
+  ];
+  for (const { route, allow } of wrongMethods) {
+    const response = await jar.request(origin, route, { method: 'PUT', headers: { Origin: PUBLIC_ORIGIN } });
+    assert.equal(response.status, 405, route);
+    assert.equal(response.headers.get('allow'), allow, route);
+  }
   assert.equal(coreCalls, 0);
 });
 
@@ -581,6 +592,10 @@ async function stopProcess(process: ServiceProcess, code: number): Promise<void>
   assert.equal(result.signal, null, process.stderr());
 }
 
+function assertSingleDiagnostic(process: ServiceProcess, diagnostic: string): void {
+  assert.equal(process.stderr().split(diagnostic).length - 1, 1, process.stderr());
+}
+
 function initProject(project: string): string {
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: project });
   fs.writeFileSync(path.join(project, 'a.txt'), 'a\n');
@@ -625,12 +640,12 @@ test('служба: второй запуск на том же порту и н�
   const samePort = spawnService(t, processConfig(root, project, port, tools).file);
   const portResult = await withinProcessTimeout(samePort.exited);
   assert.equal(portResult.code, 1, samePort.stderr());
-  assert.match(samePort.stderr(), /EADDRINUSE/);
+  assertSingleDiagnostic(samePort, 'EADDRINUSE');
 
   const sameData = spawnService(t, processConfig(root, project, otherPort, tools).file);
   const dataResult = await withinProcessTimeout(sameData.exited);
   assert.equal(dataResult.code, 1, sameData.stderr());
-  assert.match(sameData.stderr(), /Каталог данных уже обслуживается/);
+  assertSingleDiagnostic(sameData, 'Каталог данных уже обслуживается');
   await assertPortFree(otherPort);
 
   await stopProcess(first, 0);
@@ -713,7 +728,7 @@ net.Server.prototype.listen = function (...args) {
   const failing = spawnService(t, processConfig(root, project, failingPort, tools).file, ['--import', delayHost]);
   await waitForStatus(failing, failingPort, 503);
   await stopProcess(failing, 1);
-  assert.match(failing.stderr(), /Каталог данных уже обслуживается/);
+  assertSingleDiagnostic(failing, 'Каталог данных уже обслуживается');
   await assertPortFree(failingPort);
   await stopProcess(owner, 0);
 });
