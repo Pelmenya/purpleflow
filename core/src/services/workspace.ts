@@ -107,7 +107,7 @@ export function envFilesOf(k: Kernel, run: RunFile): string[] {
 
 /** Скопировать .env-файлы проекта в worktree прогона (только недостающие; в режиме «ветка» они и так на месте). */
 export function copyEnvFiles(k: Kernel, run: RunFile) {
-  if (run.workspace === 'branch') return;
+  if (k.closing || run.workspace === 'branch') return;
   const copied: string[] = [];
   for (const slot of repoSlots(run)) {
     // У участников проекта из нескольких репозиториев файлы окружения находим сами — список в настройках про основной.
