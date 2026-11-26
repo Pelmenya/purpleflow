@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -154,7 +155,10 @@ test('обзор: две сессии видят одинаковую непус
   assert.equal(firstResponse.status, 200);
   assert.deepEqual(firstSnapshot, secondSnapshot);
   assert.equal(firstSnapshot.projects.length, 1);
-  assert.deepEqual(firstSnapshot.runs.map((item) => item.id), [run.id]);
+  assert.deepEqual(
+    firstSnapshot.runs.map((item) => item.id),
+    [run.id],
+  );
 
   const firstHtml = await (await first.request(origin, '/')).text();
   const secondHtml = await (await second.request(origin, '/')).text();
@@ -194,7 +198,6 @@ test('обзор: прямая ссылка ведёт ко входу и воз
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Записанный прогон/);
 });
-
 
 test('обзор: название прогона с <script> выводится текстом', linux, async (t) => {
   const root = tempRoot(t);
@@ -264,44 +267,47 @@ test('обзор: чужой id прогона — 404', linux, async (t) => {
   assert.equal(unknown.status, 404);
 });
 
-test('вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, шестой неверный вход 429 — ядро не вызвано', linux, async (t) => {
-  const { host, origin } = await overviewFixture(t);
-  let coreCalls = 0;
-  const snapshot = host.snapshot.bind(host);
-  host.snapshot = async () => {
-    coreCalls++;
-    return snapshot();
-  };
-  const jar = new CookieJar();
-  const wrongOrigin = await jar.request(origin, '/login', {
-    method: 'POST',
-    headers: { Origin: 'https://attacker.example' },
-    body: new URLSearchParams({ secret: SECRET }),
-  });
-  assert.equal(wrongOrigin.status, 403);
-  assert.equal((await jar.login(origin, '/', 'неверно')).status, 401);
-
-  const tooLarge = await new Promise<http.IncomingMessage>((resolve, reject) => {
-    const request = http.request(`${origin}/login`, { method: 'POST', headers: { Origin: PUBLIC_ORIGIN } }, resolve);
-    request.on('error', reject);
-    request.write(Buffer.alloc(16 * 1024, 'a'));
-    request.write(Buffer.alloc(1, 'b'));
-    request.end();
-  });
-  assert.equal(tooLarge.statusCode, 413);
-  tooLarge.resume();
-  await once(tooLarge, 'end');
-
-  for (let attempt = 0; attempt < 4; attempt++) {
+test(
+  'вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, шестой неверный вход 429 — ядро не вызвано',
+  linux,
+  async (t) => {
+    const { host, origin } = await overviewFixture(t);
+    let coreCalls = 0;
+    const snapshot = host.snapshot.bind(host);
+    host.snapshot = async () => {
+      coreCalls++;
+      return snapshot();
+    };
+    const jar = new CookieJar();
+    const wrongOrigin = await jar.request(origin, '/login', {
+      method: 'POST',
+      headers: { Origin: 'https://attacker.example' },
+      body: new URLSearchParams({ secret: SECRET }),
+    });
+    assert.equal(wrongOrigin.status, 403);
     assert.equal((await jar.login(origin, '/', 'неверно')).status, 401);
-  }
-  const limited = await jar.login(origin, '/', 'неверно');
-  assert.equal(limited.status, 429);
-  assert.ok(Number(limited.headers.get('retry-after')) > 0);
-  assert.match(await limited.text(), /Слишком много попыток/);
-  assert.equal(coreCalls, 0);
-});
 
+    const tooLarge = await new Promise<http.IncomingMessage>((resolve, reject) => {
+      const request = http.request(`${origin}/login`, { method: 'POST', headers: { Origin: PUBLIC_ORIGIN } }, resolve);
+      request.on('error', reject);
+      request.write(Buffer.alloc(16 * 1024, 'a'));
+      request.write(Buffer.alloc(1, 'b'));
+      request.end();
+    });
+    assert.equal(tooLarge.statusCode, 413);
+    tooLarge.resume();
+    await once(tooLarge, 'end');
+
+    for (let attempt = 0; attempt < 4; attempt++) {
+      assert.equal((await jar.login(origin, '/', 'неверно')).status, 401);
+    }
+    const limited = await jar.login(origin, '/', 'неверно');
+    assert.equal(limited.status, 429);
+    assert.ok(Number(limited.headers.get('retry-after')) > 0);
+    assert.match(await limited.text(), /Слишком много попыток/);
+    assert.equal(coreCalls, 0);
+  },
+);
 
 async function freePort(): Promise<number> {
   const server = net.createServer();
@@ -488,4 +494,222 @@ test('служба: отказ host.close() всё равно закрывает
   );
   await withinFiveSeconds(closed.then(() => undefined));
   await assertPortFree(port);
+});
+
+const DIST_MAIN = fileURLToPath(new URL('../dist/server/main.js', import.meta.url));
+const processLinux = { ...linux, timeout: 45_000 };
+
+interface ServiceProcess {
+  child: ChildProcess;
+  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  stderr(): string;
+}
+
+async function withinProcessTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('Процесс не завершился за 15 секунд')), 15_000))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function spawnService(t: TestContext, configFile: string, nodeArgs: string[] = []): ServiceProcess {
+  const child = spawn(process.execPath, [...nodeArgs, DIST_MAIN, '--config', configFile], {
+    stdio: ['ignore', 'ignore', 'pipe'],
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (chunk: string) => (stderr += chunk));
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once('exit', (code, signal) => resolve({ code, signal }));
+  });
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    await exited;
+  });
+  return { child, exited, stderr: () => stderr };
+}
+
+function processConfig(root: string, project: string, port: number, toolPaths: ServerConfig['settings']['toolPaths'] = {}) {
+  const config = configFor(root, project, port);
+  config.settings.toolPaths = toolPaths;
+  config.settings.userConfig = false;
+  const file = path.join(root, `config-${port}.json`);
+  fs.writeFileSync(file, JSON.stringify({ ...config, settings: { ...config.settings, proxy: undefined } }));
+  return { config, file };
+}
+
+function processTools(root: string, pidFile?: string): ServerConfig['settings']['toolPaths'] {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const claude = path.join(bin, 'claude');
+  const pidLine = pidFile ? `echo "$$" >> ${JSON.stringify(pidFile)}\nexec sleep 30\n` : 'exit 0\n';
+  fs.writeFileSync(claude, `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "claude 1.0.0"; exit 0; fi\n${pidLine}`, { mode: 0o755 });
+  const openspec = path.join(bin, 'openspec');
+  fs.writeFileSync(
+    openspec,
+    '#!/bin/sh\n[ "$1" = "--version" ] && echo 1.0.0 && exit 0\n[ "$1" = "init" ] && mkdir -p openspec/changes\nexit 0\n',
+    { mode: 0o755 },
+  );
+  return { claude, openspec };
+}
+
+async function waitForStatus(process: ServiceProcess, port: number, status: number): Promise<void> {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    if (process.child.exitCode !== null || process.child.signalCode !== null) break;
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/login`);
+      await response.arrayBuffer();
+      if (response.status === status) return;
+    } catch {}
+  }
+  assert.fail(`Не получен HTTP ${status}: ${process.stderr()}`);
+}
+
+async function stopProcess(process: ServiceProcess, code: number): Promise<void> {
+  process.child.kill('SIGTERM');
+  const result = await withinProcessTimeout(process.exited);
+  assert.equal(result.code, code, process.stderr());
+  assert.equal(result.signal, null, process.stderr());
+}
+
+function initProject(project: string): string {
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: project });
+  fs.writeFileSync(path.join(project, 'a.txt'), 'a\n');
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'add', '-A'], { cwd: project });
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'init'], { cwd: project });
+  return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).trim();
+}
+
+async function waitForFile(file: string): Promise<void> {
+  for (let attempt = 0; attempt < 400; attempt++) {
+    if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').trim()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.fail(`Файл не появился: ${file}`);
+}
+
+test('служба: нечитаемый конфиг — код 1, порт свободен, каталог данных не создан', processLinux, async (t) => {
+  const root = tempRoot(t);
+  const port = await freePort();
+  const dataDir = path.join(root, 'data');
+  const configFile = path.join(root, 'broken.json');
+  fs.writeFileSync(configFile, `{"dataDir":${JSON.stringify(dataDir)},"port":${port},`);
+  const process = spawnService(t, configFile);
+
+  const result = await withinProcessTimeout(process.exited);
+  assert.equal(result.code, 1, process.stderr());
+  assert.equal(result.signal, null);
+  assert.equal(fs.existsSync(dataDir), false);
+  await assertPortFree(port);
+});
+
+test('служба: второй запуск на том же порту и на другом порту с тем же каталогом данных — код 1', processLinux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const port = await freePort();
+  const otherPort = await freePort();
+  const tools = processTools(root);
+  const first = spawnService(t, processConfig(root, project, port, tools).file);
+  await waitForStatus(first, port, 200);
+
+  const samePort = spawnService(t, processConfig(root, project, port, tools).file);
+  const portResult = await withinProcessTimeout(samePort.exited);
+  assert.equal(portResult.code, 1, samePort.stderr());
+  assert.match(samePort.stderr(), /EADDRINUSE/);
+
+  const sameData = spawnService(t, processConfig(root, project, otherPort, tools).file);
+  const dataResult = await withinProcessTimeout(sameData.exited);
+  assert.equal(dataResult.code, 1, sameData.stderr());
+  assert.match(sameData.stderr(), /Каталог данных уже обслуживается/);
+  await assertPortFree(otherPort);
+
+  await stopProcess(first, 0);
+  await assertPortFree(port);
+});
+
+test('служба: SIGTERM завершает агента, очередь не стартует', processLinux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const head = initProject(project);
+  const port = await freePort();
+  const pidFile = path.join(root, 'agent-pids');
+  const { config, file } = processConfig(root, project, port, processTools(root, pidFile));
+  const store = new RunStore(config.dataDir);
+  const active = saveRun(store, project, {
+    title: 'Активный A',
+    status: 'running',
+    next: 'implement',
+    baseCommit: head,
+    createdAt: '2026-01-01T00:00:00Z',
+    testCommand: '',
+  });
+  const queued = saveRun(store, project, {
+    title: 'Ожидающий B',
+    status: 'queued',
+    next: 'implement',
+    baseCommit: head,
+    createdAt: '2026-01-01T00:00:01Z',
+    workspacePending: true,
+    testCommand: '',
+  });
+  const process = spawnService(t, file);
+  await waitForFile(pidFile);
+  const agentPid = Number(fs.readFileSync(pidFile, 'utf8').trim().split('\n')[0]);
+  assert.ok(Number.isInteger(agentPid) && agentPid > 0);
+
+  await stopProcess(process, 0);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    let alive = true;
+    try {
+      globalThis.process.kill(agentPid, 0);
+    } catch {
+      alive = false;
+    }
+    if (!alive) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    if (attempt === 99) assert.fail(`Агент ${agentPid} пережил SIGTERM службы`);
+  }
+  assert.equal(fs.readFileSync(pidFile, 'utf8').trim().split('\n').length, 1, 'ожидающий прогон запустил второго агента');
+  assert.notEqual(store.load(queued.id)?.status, 'running');
+  assert.ok(store.load(active.id));
+  await assertPortFree(port);
+});
+
+test('служба: отказ startHost и SIGTERM — код 1', processLinux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const ownerPort = await freePort();
+  const failingPort = await freePort();
+  const tools = processTools(root);
+  const owner = spawnService(t, processConfig(root, project, ownerPort, tools).file);
+  await waitForStatus(owner, ownerPort, 200);
+
+  const delayHost = path.join(root, 'delay-host.mjs');
+  fs.writeFileSync(
+    delayHost,
+    `import net from 'node:net';
+const listen = net.Server.prototype.listen;
+net.Server.prototype.listen = function (...args) {
+  if (typeof args[0] === 'string' && args[0].startsWith('\\0purpleflow-data-')) {
+    setTimeout(() => listen.apply(this, args), 500);
+    return this;
+  }
+  return listen.apply(this, args);
+};
+`,
+  );
+  const failing = spawnService(t, processConfig(root, project, failingPort, tools).file, ['--import', delayHost]);
+  await waitForStatus(failing, failingPort, 503);
+  await stopProcess(failing, 1);
+  assert.match(failing.stderr(), /Каталог данных уже обслуживается/);
+  await assertPortFree(failingPort);
+  await stopProcess(owner, 0);
 });

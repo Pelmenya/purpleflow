@@ -1,5 +1,6 @@
 import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
-import { buildAgentEnv, readSecret } from './config.js';
+import { pathToFileURL } from 'node:url';
+import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
 import type { Host, HostSnapshot } from './host.js';
@@ -12,10 +13,7 @@ export interface Service {
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(
-    /[&<>"']/g,
-    (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!,
-  );
+  return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]!);
 }
 
 function send(
@@ -29,7 +27,13 @@ function send(
 }
 
 function html(res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}): void {
-  send(res, status, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>PurpleFlow</title></head><body>${body}</body></html>`, 'text/html; charset=utf-8', headers);
+  send(
+    res,
+    status,
+    `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>PurpleFlow</title></head><body>${body}</body></html>`,
+    'text/html; charset=utf-8',
+    headers,
+  );
 }
 
 function loginPage(returnTo: string, error = ''): string {
@@ -68,11 +72,7 @@ function sessionToken(req: IncomingMessage): string {
   return '';
 }
 
-export function createServerApp(
-  config: ServerConfig,
-  host: Host,
-  opts: { now?: () => number; sessions?: Sessions } = {},
-): RequestListener {
+export function createServerApp(config: ServerConfig, host: Host, opts: { now?: () => number; sessions?: Sessions } = {}): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -117,10 +117,12 @@ export function createServerApp(
           html(res, 429, loginPage(returnTo, 'Слишком много попыток'), { 'Retry-After': String(result.retryAfterSec) });
           return;
         }
-        res.writeHead(303, {
-          Location: returnTo,
-          'Set-Cookie': `pf_session=${result.token}; HttpOnly; Secure; SameSite=Strict; Path=/`,
-        }).end();
+        res
+          .writeHead(303, {
+            Location: returnTo,
+            'Set-Cookie': `pf_session=${result.token}; HttpOnly; Secure; SameSite=Strict; Path=/`,
+          })
+          .end();
         return;
       }
       if (route === '/logout' && method === 'POST') {
@@ -232,4 +234,63 @@ export async function startService(
     return stopPromise;
   };
   return { ready, stop };
+}
+
+export async function main(argv: string[]): Promise<void> {
+  let starting: Promise<Service> | undefined;
+  let failed = false;
+  let signaled = false;
+  let completion: Promise<void> | undefined;
+  const report = (error: unknown): void => {
+    failed = true;
+    console.error(error instanceof Error ? error.message : String(error));
+  };
+  const finish = (): Promise<void> => {
+    completion ??= (async () => {
+      let service: Service | undefined;
+      if (starting) {
+        try {
+          service = await starting;
+        } catch (error) {
+          report(error);
+        }
+      }
+      if (service) {
+        try {
+          await service.stop();
+        } catch (error) {
+          report(error);
+        }
+      }
+      process.exitCode = failed ? 1 : 0;
+    })();
+    return completion;
+  };
+  const onSignal = (): void => {
+    signaled = true;
+    void finish();
+  };
+  process.once('SIGTERM', onSignal);
+  process.once('SIGINT', onSignal);
+
+  try {
+    if (argv.length !== 2 || argv[0] !== '--config' || !argv[1]) {
+      throw new Error('Использование: main.js --config <файл>');
+    }
+    const config = loadServerConfig(argv[1]);
+    starting = startService(config);
+    const service = await starting;
+    void service.ready.catch((error) => {
+      report(error);
+      return finish();
+    });
+    if (signaled) await finish();
+  } catch (error) {
+    report(error);
+    await finish();
+  }
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void main(process.argv.slice(2));
 }
