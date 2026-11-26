@@ -921,6 +921,69 @@ test(
   },
 );
 
+test(
+  'только agy: план, реализация, ревью и менеджер — на agy; правки запрещены там, где стадия только читает',
+  { skip: !hasOpenspec, timeout: 120_000 },
+  async () => {
+    const repo = fs.realpathSync(makeRepo());
+    const fake = fakeClaude({
+      implement: (_n, cwd) =>
+        fs.writeFileSync(path.join(cwd, 'src/math.js'), 'export const add = (a, b) => a + b;\nexport const mul = (a, b) => a * b;\n'),
+      review: () => ({ blocking: [], notes: [] }),
+    });
+    const calls: { readOnly?: boolean; model?: string }[] = [];
+    const agy = (async (o: { prompt: string; cwd: string; systemPrompt?: string; readOnly?: boolean; model?: string }) => {
+      calls.push({ readOnly: o.readOnly, model: o.model });
+      return fake.fn(o);
+    }) as never;
+    // Установлен только agy, и включён только он.
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-bin-'));
+    fs.writeFileSync(path.join(bin, 'agy'), '#!/bin/sh\necho "1.5.17"\n', { mode: 0o755 });
+    const settings = {
+      toolPaths: { agy: path.join(bin, 'agy'), claude: path.join(bin, 'нет-claude'), codex: path.join(bin, 'нет-codex') },
+      proxy: { baseUrl: '', apiKey: '' },
+      models: { planner: 'gemini-4-hydrogen-high', executor: 'gemini-3.8-flash-low', reviewer: 'gemini-4-hydrogen-high' },
+      agents: { planner: 'agy', executor: 'agy', reviewer: 'agy' },
+      enabledAgents: ['agy'],
+      agentTimeoutMin: 5,
+      testTimeoutMin: 2,
+      maxParallel: 2,
+    } as unknown as CoreSettings;
+    const never = (name: string) =>
+      (() => {
+        throw new Error(`${name} не должен запускаться`);
+      }) as never;
+    const core = new Orchestrator({
+      dataDir: fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-data-')),
+      promptsDir: PROMPTS,
+      env,
+      getSettings: () => settings,
+      runners: { claude: never('claude'), codex: never('codex'), agy },
+    });
+
+    const { runId } = await core.dispatch({
+      type: 'run.start',
+      input: {
+        projectPath: repo,
+        task: 'Добавь функцию mul(a, b) в src/math.js.',
+        testCommand: 'node --test',
+        mode: 'task',
+        workspace: 'worktree',
+      } as never,
+    });
+    await untilGate(core, runId, 'gate1');
+    await core.dispatch({ type: 'gate.approve', runId });
+    const r = await untilGate(core, runId, 'gate2');
+    assert.ok(r.attempts.some((a) => a.stage === 'review' && a.status === 'done'));
+    // Исполнитель пишет код, ревьюер — только читает.
+    assert.ok(calls.some((c) => c.model === 'gemini-3.8-flash-low' && !c.readOnly));
+    assert.ok(calls.some((c) => c.model === 'gemini-4-hydrogen-high' && c.readOnly));
+    const chat = await core.askManager(runId, 'Как дела?');
+    assert.equal(chat.at(-1)!.text, 'Всё идёт по плану.');
+    assert.equal(calls.at(-1)!.readOnly, true);
+  },
+);
+
 test('менеджер на codex по выбору в настройках, даже если claude установлен', { skip: !hasOpenspec, timeout: 120_000 }, async () => {
   const repo = fs.realpathSync(makeRepo());
   const fake = fakeClaude({ implement: () => {}, review: () => ({ blocking: [], notes: [] }) });

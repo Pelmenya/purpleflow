@@ -22,14 +22,16 @@ git('fetch', 'origin', 'main', '--tags');
 if (git('rev-parse', 'HEAD') !== git('rev-parse', 'origin/main')) fail('main расходится с origin/main.');
 if (git('tag', '--list', version)) fail(`Тег ${version} уже есть.`);
 
-for (const file of ['package.json', 'app/package.json', 'core/package.json']) {
+// Установщик выходит в тех же релизах, что и PurpleFlow, поэтому версия у них общая.
+const PACKAGES = ['package.json', 'app/package.json', 'core/package.json', 'installer/package.json'];
+for (const file of PACKAGES) {
   const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
   pkg.version = version;
   fs.writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`);
 }
 execFileSync('npm', ['install', '--package-lock-only', '--no-audit', '--no-fund', '--ignore-scripts'], { stdio: 'inherit' });
 
-git('add', 'package.json', 'app/package.json', 'core/package.json', 'package-lock.json');
+git('add', ...PACKAGES, 'package-lock.json');
 git('commit', '-m', `Версия ${version}`);
 git('tag', version);
 git('push', 'origin', 'main', version);

@@ -1,5 +1,21 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Brain, Clock, FileText, FolderOpen, FolderPlus, ListTodo, Paperclip, Square, Trash2, X } from 'lucide-react';
+import {
+  ArrowUp,
+  Brain,
+  Clock,
+  Eye,
+  FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  ListTodo,
+  Paperclip,
+  Pencil,
+  ShieldOff,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { AgentKind, ChatFile, ChatMessage, ProjectListItem } from '@purpleflow/core';
 import { AssistantMessage } from './ChatAnswer';
 import { useMentions } from './ChatMentions';
@@ -12,9 +28,12 @@ import { onCoreEvent, useStore } from '../lib/store';
 import { shortPath } from '../lib/format';
 import { enabledList } from '../lib/tools';
 import { EFFORT_LEVELS, effortOf, effortOptions } from '../lib/effort';
+import { ACCESS_OPTIONS, accessOf, accessPatch, type ChatAccess } from '../lib/chatAccess';
 import { formatPick, insertPick, type PickedElement } from '../lib/pickElement';
 import { PATH_DRAG, insertMention } from '../lib/mentions';
 import { ChatSide, ChatSideRail, useChatChanged, useSideWidth, type ChatPane } from './ChatSide';
+import { DictationButton } from '../components/Dictation';
+import { insertDictation } from '../lib/wav';
 import { bridge, cleanErr } from '../lib/api';
 
 const SUGGEST_PROJECT = ['Как устроен этот проект?', 'Где обрабатываются ошибки API?', 'Найди и поправь опечатки в README'];
@@ -40,7 +59,14 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(Boolean(chatId));
   // Черновик нового чата: проект, агент, модель и правки до первого сообщения.
-  const [draft, setDraft] = useState<{ projectPath?: string; agent: AgentKind; model: string; effort?: string; edits: boolean }>(() => ({
+  const [draft, setDraft] = useState<{
+    projectPath?: string;
+    agent: AgentKind;
+    model: string;
+    effort?: string;
+    edits: boolean;
+    fullAccess?: boolean;
+  }>(() => ({
     projectPath: initialProject,
     agent: settings?.agents.executor ?? 'claude',
     model: '',
@@ -49,6 +75,8 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [text, setText] = useState(initialText ?? '');
   const [files, setFiles] = useState<Picked[]>([]);
+  /** Папки для контекста нового чата — до первого сообщения чата ещё нет, они уйдут в createChat. */
+  const [draftDirs, setDraftDirs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   /** Что человек набирает в заголовке: события ответа агента приходят постоянно и иначе затирали бы ввод. */
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
@@ -123,12 +151,31 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
   useLayoutEffect(() => {
     const el = input.current;
     if (!el) return;
+    // Высоту меряем через auto, но анимируем от прежней к новой: из auto переход не идёт.
+    const prev = el.style.height;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
+    const next = `${Math.min(el.scrollHeight, 240)}px`;
+    el.style.height = prev;
+    void el.offsetHeight;
+    el.style.height = next;
   }, [text]);
 
   useEffect(() => input.current?.focus(), [chatId]);
 
+  const dirs = chat ? (chat.dirs ?? []) : draftDirs;
+  const setDirs = (next: string[]) => {
+    setError(null);
+    if (!chat) return setDraftDirs(next);
+    bridge.core.updateChat(chat.id, { dirs: next }).catch((e) => setError(cleanErr(e)));
+  };
+  const addDirs = (paths: string[]) => {
+    const fresh = paths.filter((p) => p && !dirs.includes(p) && p !== projectPath);
+    if (fresh.length) setDirs([...dirs, ...fresh]);
+  };
+  const pickDir = async () => {
+    const d = await bridge.pickFolder('Папка для контекста чата');
+    if (d) addDirs([d]);
+  };
   const addFiles = (list: FileList | File[]) => {
     const all = [...list];
     const big = all.filter((f) => f.size > MAX_MB * 1024 * 1024);
@@ -154,7 +201,8 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
   const enabled = enabledList(settings?.enabledAgents);
   const raw = chat ?? draft;
   const conf = enabled.includes(raw.agent) ? raw : { ...raw, agent: enabled[0], model: '' };
-  const setConf = async (patch: Partial<Pick<ChatFile, 'agent' | 'model' | 'effort' | 'edits'>>) => {
+  const access = accessOf(conf);
+  const setConf = async (patch: Partial<Pick<ChatFile, 'agent' | 'model' | 'effort' | 'edits' | 'fullAccess'>>) => {
     setError(null);
     if (!chat) return setDraft((d) => ({ ...d, ...patch, ...(patch.agent && patch.model === undefined ? { model: '' } : {}) }));
     try {
@@ -208,7 +256,7 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
       );
       let id = chat?.id;
       if (!id) {
-        const created = await bridge.core.createChat(draft);
+        const created = await bridge.core.createChat(draftDirs.length ? { ...draft, dirs: draftDirs } : draft);
         id = created.id;
       }
       await bridge.core.sendChat(id, t, attachments);
@@ -386,9 +434,11 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                   <h2>{projectPath ? `Спросите о ${baseName(projectPath)}` : 'О чём поговорим?'}</h2>
                   <p>
                     {projectPath
-                      ? conf.edits
-                        ? 'Агент видит проект и может вносить небольшие правки по вашей просьбе — без плана, ревью и приёмки. Для заметных изменений заведите задачу.'
-                        : 'Агент видит проект, но только читает файлы.'
+                      ? access === 'full'
+                        ? 'Агент видит проект и работает без песочницы: правки, коммиты, процессы — по вашей просьбе, без плана, ревью и приёмки.'
+                        : access === 'edits'
+                          ? 'Агент видит проект и может вносить небольшие правки по вашей просьбе — без плана, ревью и приёмки. Для заметных изменений заведите задачу.'
+                          : 'Агент видит проект, но только читает файлы.'
                       : 'Обычный чат с моделью. Выберите проект сверху, чтобы агент видел код.'}
                   </p>
                   <div className="chat-suggest">
@@ -412,6 +462,12 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                     onAllowMcp={(t, always) =>
                       chat && void bridge.core.allowChatMcp(chat.id, { ...t, always }).catch((e) => setError(cleanErr(e)))
                     }
+                    onPermission={(rid, a) => (chat ? bridge.core.answerChatPermission(chat.id, rid, a) : Promise.resolve())}
+                    onGrantFull={
+                      access === 'edits' && chat
+                        ? () => void bridge.core.grantChatFullAccess(chat.id).catch((e) => setError(cleanErr(e)))
+                        : undefined
+                    }
                   />
                 ),
               )}
@@ -431,13 +487,36 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                 e.preventDefault();
                 // Файл или папка из вкладки «Файлы» — упоминание, а не вложение.
                 const rel = e.dataTransfer.getData(PATH_DRAG);
-                if (rel) mentionPath(rel);
-                else if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+                if (rel) return mentionPath(rel);
+                // Папки с диска — в контекст чата целиком, остальное — вложениями.
+                const plain: File[] = [];
+                const folders: string[] = [];
+                for (const item of [...e.dataTransfer.items]) {
+                  const file = item.getAsFile();
+                  if (!file) continue;
+                  if (item.webkitGetAsEntry()?.isDirectory) folders.push(bridge.pathForFile(file));
+                  else plain.push(file);
+                }
+                if (folders.length) addDirs(folders);
+                if (plain.length) addFiles(plain);
               }}
             >
               {mention.menu}
-              {files.length > 0 && (
+              {(files.length > 0 || dirs.length > 0) && (
                 <div className="chat-files">
+                  {dirs.map((d) => (
+                    <span key={d} className="chat-file is-dir" title={d}>
+                      <Folder size={14} />
+                      <span>{baseName(d)}</span>
+                      <button
+                        type="button"
+                        aria-label={`Убрать папку ${baseName(d)} из контекста`}
+                        onClick={() => setDirs(dirs.filter((x) => x !== d))}
+                      >
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
                   {files.map((f) => (
                     <span key={f.id} className="chat-file">
                       {f.url ? <img src={f.url} alt="" /> : <FileText size={14} />}
@@ -480,6 +559,15 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                 >
                   <Paperclip size={16} />
                 </button>
+                <button
+                  type="button"
+                  className="chat-attach"
+                  aria-label="Добавить папку в контекст"
+                  title="Добавить папку в контекст чата: агент сможет читать её файлы (можно перетащить папку в поле)"
+                  onClick={() => void pickDir()}
+                >
+                  <FolderPlus size={16} />
+                </button>
                 <input
                   ref={fileInput}
                   type="file"
@@ -490,30 +578,17 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                     e.target.value = '';
                   }}
                 />
-                <div className="segmented chat-mode" role="radiogroup" aria-label="Режим">
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={!conf.edits}
-                    className={!conf.edits ? 'is-on' : ''}
-                    disabled={busy}
-                    title="Агент только читает файлы и отвечает"
-                    onClick={() => conf.edits && void setConf({ edits: false })}
-                  >
-                    Вопросы
-                  </button>
-                  <button
-                    type="button"
-                    role="radio"
-                    aria-checked={conf.edits}
-                    className={conf.edits ? 'is-on' : ''}
-                    disabled={busy}
-                    title="Агент может менять файлы, когда вы просите"
-                    onClick={() => !conf.edits && void setConf({ edits: true })}
-                  >
-                    Правки
-                  </button>
-                </div>
+                <Select<ChatAccess>
+                  className={`chat-mode is-${access}`}
+                  ariaLabel="Режим"
+                  title="Что агенту можно в этом чате"
+                  icon={access === 'read' ? <Eye size={14} /> : access === 'edits' ? <Pencil size={14} /> : <ShieldOff size={14} />}
+                  value={access}
+                  minWidth={300}
+                  disabled={busy}
+                  onChange={(a) => a !== access && void setConf(accessPatch(a))}
+                  options={ACCESS_OPTIONS}
+                />
                 <AgentModelPicker
                   agents={enabled}
                   agent={conf.agent}
@@ -539,6 +614,13 @@ export function ChatScreen({ chatId, initialProject, initialText }: { chatId?: s
                   />
                 )}
                 <span className="chat-compose-end">
+                  <DictationButton
+                    onText={(t) => {
+                      const el = input.current;
+                      setText((prev) => insertDictation(prev, t, el?.selectionStart ?? prev.length).value);
+                      el?.focus();
+                    }}
+                  />
                   {busy && (
                     <button
                       type="button"

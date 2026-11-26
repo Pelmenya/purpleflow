@@ -33,7 +33,19 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.test.ts', 'app/e2e/**', 'core/scripts/**', 'scripts/**', 'app/src/main/dev-capture.ts'],
+    files: ['installer/src/renderer/**/*.ts'],
+    languageOptions: { globals: { ...globals.browser } },
+  },
+  {
+    files: [
+      '**/*.test.ts',
+      'installer/test/**',
+      'installer/scripts/**',
+      'app/e2e/**',
+      'core/scripts/**',
+      'scripts/**',
+      'app/src/main/dev-capture.ts',
+    ],
     rules: { 'no-console': 'off' },
   },
   prettier,

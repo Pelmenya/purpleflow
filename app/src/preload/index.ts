@@ -1,5 +1,5 @@
 import '@sentry/electron/preload';
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { coreMethodNames, type CoreApi, type CoreMethod, type PurpleFlowBridge } from '../shared/ipc';
 import type { CoreEvent } from '@purpleflow/core';
 import type { UpdateState } from '../shared/update';
@@ -47,6 +47,20 @@ const bridge: PurpleFlowBridge = {
   },
   proxyModels: () => ipcRenderer.invoke('models:list'),
   pickFolder: (title?: string) => ipcRenderer.invoke('dialog:folder', title),
+  dictation: {
+    status: () => ipcRenderer.invoke('dictation:status'),
+    download: (id) => ipcRenderer.invoke('dictation:download', id),
+    cancel: (id) => ipcRenderer.invoke('dictation:cancel', id),
+    remove: (id) => ipcRenderer.invoke('dictation:remove', id),
+    mic: () => ipcRenderer.invoke('dictation:mic'),
+    transcribe: (wav, model, lang) => ipcRenderer.invoke('dictation:transcribe', wav, model, lang),
+    onProgress(fn) {
+      const h = (_: unknown, id: string, share: number) => fn(id, share);
+      ipcRenderer.on('dictation:progress', h);
+      return () => ipcRenderer.removeListener('dictation:progress', h);
+    },
+  },
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
   pickFile: () => ipcRenderer.invoke('dialog:file'),
   openPath: (p) => ipcRenderer.invoke('shell:open', p),
   previewEmulate: (id, mobile) => ipcRenderer.invoke('preview:emulate', id, mobile),

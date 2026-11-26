@@ -6,6 +6,91 @@ import path from 'node:path';
 import { expect, test } from '@playwright/test';
 import { launch, makeSandbox, quit } from './harness';
 
+test('чат: ссылка с параметром сохраняет черновик, ссылка на якорь работает', async () => {
+  const box = makeSandbox();
+  const l = await launch(box);
+  const { page } = l;
+  try {
+    await page.getByRole('button', { name: /Создать/ }).click();
+    await page.getByRole('menuitem', { name: /Чат/ }).click();
+    const input = page.locator('.chat-compose textarea');
+    await input.fill('Покажи ссылки Markdown');
+    await input.press('Enter');
+
+    const answer = page.locator('.chat-msg.is-assistant');
+    const queryLink = answer.getByRole('link', { name: 'Параметр' });
+    await expect(queryLink).toBeVisible();
+    await input.fill('Несохранённый черновик');
+    const url = new URL('#example', page.url()).href;
+    await answer.getByRole('link', { name: 'Якорь' }).click();
+    await expect(page).toHaveURL(url);
+    await expect(input).toHaveValue('Несохранённый черновик');
+
+    // Playwright waits for a navigation that Electron cancels in the main process.
+    await queryLink.click({ noWaitAfter: true });
+    const afterClick = await l.app.evaluate(async ({ BrowserWindow }) => {
+      const { webContents } = BrowserWindow.getAllWindows()[0];
+      return webContents.executeJavaScript(`({ url: location.href, draft: document.querySelector('.chat-compose textarea')?.value })`);
+    });
+    expect(afterClick).toEqual({ url, draft: 'Несохранённый черновик' });
+
+    // Перезагрузка окна (кнопка в ErrorBoundary) по-прежнему работает.
+    await page.evaluate(() => Object.assign(window, { beforeReload: true }));
+    await Promise.all([page.waitForEvent('load'), page.evaluate(() => setTimeout(() => location.reload()))]);
+    expect(await page.evaluate(() => 'beforeReload' in window)).toBe(false);
+  } finally {
+    await quit(l);
+    box.cleanup();
+  }
+});
+
+test('чат: агент без вызова просит полный доступ текстом (как codex) — карточка запроса есть', async () => {
+  const box = makeSandbox();
+  const l = await launch(box);
+  const { page } = l;
+  try {
+    await page.getByRole('button', { name: /Создать/ }).click();
+    await page.getByRole('menuitem', { name: /Чат/ }).click();
+    const input = page.locator('.chat-compose textarea');
+    await input.fill('Закоммить молча');
+    await input.press('Enter');
+    await expect(page.getByRole('button', { name: 'Дать доступ и повторить' })).toBeVisible();
+    if (process.env.PURPLEFLOW_SHOTS) {
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: path.join(box.root, '..', 'pf-chat-access.png') });
+    }
+  } finally {
+    await quit(l);
+    box.cleanup();
+  }
+});
+
+test('чат: песочница правок не пустила команду — запрос полного доступа, после него повтор без песочницы', async () => {
+  const box = makeSandbox();
+  const l = await launch(box);
+  const { page } = l;
+  try {
+    await page.getByRole('button', { name: /Создать/ }).click();
+    await page.getByRole('menuitem', { name: /Чат/ }).click();
+    const input = page.locator('.chat-compose textarea');
+    await input.fill('Закоммить правки');
+    await input.press('Enter');
+
+    const grant = page.getByRole('button', { name: 'Дать доступ и повторить' });
+    await expect(grant).toBeVisible();
+    await grant.click();
+    await expect(page.getByRole('button', { name: 'Режим' })).toContainText('Полный доступ');
+    await expect(page.locator('.chat-msg.is-assistant').last()).toContainText('Закоммитил.');
+    // Карточка только у ответа, который ещё можно продолжить, и только в режиме правок.
+    await expect(grant).toHaveCount(0);
+    const chats = box.calls().filter((c) => /Закоммить правки|Включил полный доступ/.test(c.prompt));
+    expect(chats.at(-1)!.args.join(' ')).not.toContain('"sandbox"');
+  } finally {
+    await quit(l);
+    box.cleanup();
+  }
+});
+
 test('чат: панель под полем ввода, таблица и блок кода в ответе', async () => {
   const box = makeSandbox();
   const l = await launch(box);
@@ -15,9 +100,14 @@ test('чат: панель под полем ввода, таблица и бл�
     await page.getByRole('menuitem', { name: /Чат/ }).click();
 
     const bar = page.locator('.chat-compose-bar');
-    await expect(bar.getByRole('radio', { name: 'Правки' })).toHaveAttribute('aria-checked', 'true');
-    await bar.getByRole('radio', { name: 'Вопросы' }).click();
-    await expect(bar.getByRole('radio', { name: 'Вопросы' })).toHaveAttribute('aria-checked', 'true');
+    // Режим — выпадающий список из трёх: по умолчанию правки.
+    const mode = bar.getByRole('button', { name: 'Режим' });
+    await expect(mode).toContainText('Правки');
+    await mode.click();
+    await expect(page.getByRole('listbox').getByRole('option')).toHaveText([/Вопросы/, /Правки/, /Полный доступ/]);
+    if (process.env.PURPLEFLOW_SHOTS) await page.screenshot({ path: path.join(box.root, '..', 'pf-chat-mode.png') });
+    await page.getByRole('option', { name: /Вопросы/ }).click();
+    await expect(mode).toContainText('Вопросы');
     // Агент и модель — одна кнопка; своей модели у чата нет — на ней модель по умолчанию из настроек, а не пустота.
     const picker = bar.getByRole('button', { name: 'Агент и модель' });
     await expect(picker).toHaveText(/claude\s*·\s*sonnet/);
@@ -523,6 +613,94 @@ test('чат: вкладка «Запуск» — старт, вывод сер�
         ),
       )
       .toBe('down');
+  } finally {
+    await quit(l);
+    box.cleanup();
+  }
+});
+
+test('чат на agy в «Правках»: агент просит разрешение — карточка с командой, ответ уходит агенту', async () => {
+  const pre = makeSandbox();
+  const agyLog = path.join(pre.root, 'agy.jsonl');
+  const agy = path.join(pre.root, 'bin', 'agy');
+  fs.writeFileSync(agy, `#!/bin/sh\nFAKE_AGY_LOG="${agyLog}" exec "${process.execPath}" "${path.join(__dirname, 'fake-agy.mjs')}" "$@"\n`, {
+    mode: 0o755,
+  });
+  const settingsFile = path.join(pre.profile, 'settings.json');
+  const cur = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+  fs.writeFileSync(
+    settingsFile,
+    JSON.stringify({
+      ...cur,
+      toolPaths: { ...cur.toolPaths, agy },
+      enabledAgents: ['claude', 'agy'],
+      agents: { ...cur.agents, executor: 'agy' },
+    }),
+  );
+  const l = await launch(pre);
+  const { page } = l;
+  try {
+    await page.getByRole('button', { name: /Создать/ }).click();
+    await page.getByRole('menuitem', { name: /Чат/ }).click();
+    const input = page.locator('.chat-compose textarea');
+    await input.fill('Отправь ветку');
+    await input.press('Enter');
+
+    const card = page.getByRole('group', { name: 'Агент просит разрешение' });
+    await expect(card).toBeVisible();
+    await expect(card.locator('.chat-permission-cmd')).toHaveText('git push origin main');
+    if (process.env.PURPLEFLOW_SHOTS) {
+      await page.waitForTimeout(600);
+      await page.screenshot({ path: path.join(pre.root, '..', 'pf-chat-permission.png') });
+    }
+    await card.getByRole('button', { name: 'Разрешать в этом чате' }).click();
+    const answer = page.locator('.chat-msg.is-assistant').last();
+    await expect(answer).toContainText('Отправил ветку.');
+    await expect(answer.locator('.chat-permission-done')).toContainText('Разрешено в этом чате');
+    await expect(card).toHaveCount(0);
+    // Разрешение — не отказ песочницы: карточки полного доступа нет.
+    await expect(page.getByRole('button', { name: 'Дать доступ и повторить' })).toHaveCount(0);
+    const answers = fs
+      .readFileSync(agyLog, 'utf8')
+      .trim()
+      .split('\n')
+      .map((x) => JSON.parse(x));
+    expect(answers.at(-1).answer.outcome.optionId).toBe('allow');
+  } finally {
+    await quit(l);
+    pre.cleanup();
+  }
+});
+
+test('чат: папка в контексте — значок над полем, агенту путь и --add-dir; папку можно убрать', async () => {
+  const box = makeSandbox();
+  const docs = path.join(box.root, 'docs');
+  fs.mkdirSync(docs);
+  const l = await launch(box);
+  const { page } = l;
+  try {
+    await l.app.evaluate(({ dialog }, dir) => {
+      dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [dir] })) as typeof dialog.showOpenDialog;
+    }, docs);
+    await page.getByRole('button', { name: /Создать/ }).click();
+    await page.getByRole('menuitem', { name: /Чат/ }).click();
+    await page.getByRole('button', { name: 'Добавить папку в контекст' }).click();
+    const chip = page.locator('.chat-file.is-dir');
+    await expect(chip).toHaveText('docs');
+    await expect(chip).toHaveAttribute('title', docs);
+    if (process.env.PURPLEFLOW_SHOTS) await page.screenshot({ path: path.join(box.root, '..', 'pf-chat-dir.png') });
+
+    const input = page.locator('.chat-compose textarea');
+    await input.fill('Что в документации?');
+    await input.press('Enter');
+    await expect(page.locator('.chat-msg.is-assistant').last()).not.toBeEmpty();
+    const call = box.calls().find((c) => /Что в документации/.test(c.prompt))!;
+    expect(call.prompt).toContain(`- ${docs}`);
+    expect(call.args.join(' ')).toContain(`--add-dir ${docs}`);
+    // Папка остаётся в чате и после отправки; убрать — кнопкой на значке.
+    await expect(chip).toBeVisible();
+    await page.getByRole('button', { name: 'Убрать папку docs из контекста' }).click();
+    await expect(chip).toHaveCount(0);
   } finally {
     await quit(l);
     box.cleanup();

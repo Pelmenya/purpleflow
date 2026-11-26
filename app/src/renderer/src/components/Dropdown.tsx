@@ -56,14 +56,18 @@ export function usePopover(open: boolean, anchor: React.RefObject<HTMLElement | 
       const ox = doc ? -window.scrollX : c.left + sp.clientLeft - sp.scrollLeft;
       const oy = doc ? -window.scrollY : c.top + sp.clientTop - sp.scrollTop;
       const boxH = doc ? window.innerHeight : sp.clientHeight;
-      const below = window.innerHeight - r.bottom - 12;
-      const up = below < 220 && r.top > below;
+      // Место считаем в видимой части контейнера: список внутри диалога обрезается его краем, а не краем окна.
+      const viewTop = doc ? 0 : Math.max(0, c.top + sp.clientTop);
+      const viewBottom = doc ? window.innerHeight : Math.min(window.innerHeight, c.top + sp.clientTop + sp.clientHeight);
+      const below = viewBottom - r.bottom - 12;
+      const above = r.top - viewTop - 12;
+      const up = below < 220 && above > below;
       const width = Math.max(r.width, minWidth ?? 0);
       const left = Math.min(r.left, window.innerWidth - width - 8) - ox;
       setPop({
         container: sp,
         style: up
-          ? { left, width, bottom: boxH - (r.top - oy) + 6, maxHeight: Math.min(maxHeight, r.top - 12) }
+          ? { left, width, bottom: boxH - (r.top - oy) + 6, maxHeight: Math.min(maxHeight, above) }
           : { left, width, top: r.bottom - oy + 6, maxHeight: Math.min(maxHeight, below) },
       });
     };

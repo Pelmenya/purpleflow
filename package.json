@@ -1,17 +1,19 @@
 {
   "name": "purpleflow",
   "private": true,
-  "version": "0.6.1",
+  "version": "0.10.0",
   "workspaces": [
     "core",
-    "app"
+    "app",
+    "installer"
   ],
   "scripts": {
     "build:core": "npm run build -w @purpleflow/core",
     "dev": "npm run dev -w @purpleflow/app",
-    "build": "npm run build -w @purpleflow/core && npm run build -w @purpleflow/app",
-    "typecheck": "npm run typecheck -w @purpleflow/core && npm run typecheck -w @purpleflow/app",
-    "test": "npm test -w @purpleflow/core && npm test -w @purpleflow/app",
+    "dev:installer": "npm run dev -w @purpleflow/installer",
+    "build": "npm run build -w @purpleflow/core && npm run build -w @purpleflow/app && npm run build -w @purpleflow/installer",
+    "typecheck": "npm run typecheck -w @purpleflow/core && npm run typecheck -w @purpleflow/app && npm run typecheck -w @purpleflow/installer",
+    "test": "npm test -w @purpleflow/core && npm test -w @purpleflow/app && npm test -w @purpleflow/installer",
     "coverage:server": "npm run coverage:server -w @purpleflow/core",
     "test:e2e": "npm run test:e2e -w @purpleflow/app",
     "make-sample": "node scripts/make-sample.mjs",

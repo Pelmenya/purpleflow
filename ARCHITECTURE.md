@@ -1,13 +1,13 @@
 # Архитектура PurpleFlow
 
-PurpleFlow — оркестратор: своих агентов у него нет, стадии выполняют установленные CLI `claude`, `codex` и `opencode` (адаптеры — `core/src/agents/`). Код делится на ядро (`core/`, чистый TypeScript без Electron) и приложение (`app/`, Electron + React).
+PurpleFlow — оркестратор: своих агентов у него нет, стадии выполняют установленные CLI `claude`, `codex`, `opencode` и `agy` (Antigravity CLI; адаптеры — `core/src/agents/`). Код делится на ядро (`core/`, чистый TypeScript без Electron) и приложение (`app/`, Electron + React).
 
 ## Процессы
 
 ```
 renderer (React)  ──window.purpleflow──▶  preload  ──IPC──▶  main  ──MessagePort──▶  utilityProcess: core-host
                                                                                       └─ Orchestrator (core)
-                                                                                         └─ claude, codex, opencode, git, тесты — дочерние процессы
+                                                                                         └─ claude, codex, opencode, agy, git, тесты — дочерние процессы
 ```
 
 - **renderer** — интерфейс. Окно работает с `sandbox` и `contextIsolation`, без Node. К main оно обращается только через `src/renderer/src/lib/api.ts`.

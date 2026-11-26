@@ -15,6 +15,7 @@ import { repoSlots, slotPath } from '../services/repos.js';
 import type { AgentKind, RunFile } from '../types.js';
 import { captureBaseChecks, settleBaseChecks } from './checks.js';
 import { startFilesBlock } from './plan.js';
+import { startSelfCheck } from './selfcheck.js';
 export async function stageImplement(k: Kernel, run: RunFile) {
   const firstAttempt = !run.attempts.some((x) => x.stage === 'implement');
   // Быстрая правка идёт без плана. Старые прогоны могли пропустить подготовку и прийти сюда повторно.
@@ -23,7 +24,10 @@ export async function stageImplement(k: Kernel, run: RunFile) {
   if (firstAttempt) await captureBaseChecks(k, run);
   run.implAttemptsUsed++;
   const attempt = k.begin(run, 'implement', run.models.executor);
-  const prompt = k.prompts.render(tpl(k, 'implement', run), {
+  // Самопроверка: приложение поднимается в фоне, исполнитель смотрит на свои экраны через pw.
+  const self = await startSelfCheck(k, run, attempt.attempt);
+  const extra = self?.block ?? '';
+  const prompt0 = k.prompts.render(tpl(k, 'implement', run), {
     changeId: run.changeId,
     task: taskText(k, run),
     attachments: attachmentsBlock(k, run) + (await startFilesBlock(k, run)),
@@ -32,6 +36,7 @@ export async function stageImplement(k: Kernel, run: RunFile) {
     limit: run.implAttemptsLimit,
     feedback: phaseBlock(k, run) + feedbackBlock(k, run.feedback),
   });
+  const prompt = prompt0 + extra;
   let res: AgentResult;
   const systemPrompt = k.prompts.raw('executor.system.md') + modeRules(k, 'executor', run);
   const agent = run.agents.executor;
@@ -52,14 +57,21 @@ export async function stageImplement(k: Kernel, run: RunFile) {
         limit: run.implAttemptsLimit,
         feedback: phaseBlock(k, run) + feedbackBlock(k, run.feedback),
       });
-      res = await runRole(k, run, 'executor', { prompt: short, systemPrompt, openspec: true, resume: run.executorSession, onSession });
+      res = await runRole(k, run, 'executor', {
+        prompt: short + extra,
+        systemPrompt,
+        openspec: true,
+        resume: run.executorSession,
+        onSession,
+        env: self?.env,
+      });
       if (!res.ok && !res.stopped && /no conversation|session|не найден/i.test(res.error ?? '')) {
         // Сессия пропала (чистка ~/.claude или данных opencode, другой компьютер) — начинаем заново с полной постановкой.
         k.log(run, c.dim('сессия не найдена — начинаю заново') + '\n');
-        res = await freshAttempt(k, run, prompt, systemPrompt, onSession);
+        res = await freshAttempt(k, run, prompt, systemPrompt, onSession, self?.env);
       }
     } else {
-      res = await freshAttempt(k, run, prompt, systemPrompt, onSession);
+      res = await freshAttempt(k, run, prompt, systemPrompt, onSession, self?.env);
     }
     k.afterAgent(run, attempt, res);
     await checkRelatedUntouched(k, run, related);
@@ -67,6 +79,9 @@ export async function stageImplement(k: Kernel, run: RunFile) {
     // Сбой агента (ключ, токены, таймаут) не тратит попытку реализации.
     run.implAttemptsUsed--;
     throw e;
+  } finally {
+    // Сервер и браузер самопроверки — только на время реализации: дальше тесты и ревью идут без них.
+    await self?.stop();
   }
   if (run.mode === 'quick' && !run.titleFromPlan) {
     // Плана нет — короткое название пишет исполнитель последней строкой «НАЗВАНИЕ: …».
@@ -90,7 +105,14 @@ function setSession(run: RunFile, agent: AgentKind, id: string | undefined) {
 }
 
 /** Попытка с полной постановкой: claude получает новый ID сессии, opencode сообщит свой сам; у codex сессии нет. */
-function freshAttempt(k: Kernel, run: RunFile, prompt: string, systemPrompt: string, onSession?: (id: string) => void) {
+function freshAttempt(
+  k: Kernel,
+  run: RunFile,
+  prompt: string,
+  systemPrompt: string,
+  onSession?: (id: string) => void,
+  env?: NodeJS.ProcessEnv,
+) {
   const agent = run.agents.executor;
   setSession(run, agent, agent === 'claude' ? crypto.randomUUID() : undefined);
   return runRole(k, run, 'executor', {
@@ -99,6 +121,7 @@ function freshAttempt(k: Kernel, run: RunFile, prompt: string, systemPrompt: str
     openspec: true,
     sessionId: agent === 'claude' ? run.executorSession : undefined,
     onSession,
+    env,
   });
 }
 

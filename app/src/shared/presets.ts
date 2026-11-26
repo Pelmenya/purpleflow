@@ -16,6 +16,9 @@ export const TIERS: Record<AgentKind, Record<Tier, string>> = {
   codex: { low: 'gpt-6-luna', mid: 'gpt-6.1-terra', high: 'gpt-6-sol', max: 'gpt-6-astra' },
   // У opencode ступени выбирает человек из моделей своих провайдеров (opencodeTiers); с AI-прокси по умолчанию — линейка прокси.
   opencode: { low: '', mid: '', high: '', max: '' },
+  // Модели agy, которые есть и в AI-прокси PurpleSchool, и в аккаунте Google; суффикс — уровень рассуждений.
+  // gemini-4-argon убран: провайдер в прокси отвечает на него ошибкой — вернуть, когда починят.
+  agy: { low: 'gemini-3.8-flash-low', mid: 'gemini-3.8-flash-medium', high: 'gemini-3.8-flash-high', max: 'gemini-3.8-flash-high' },
 };
 
 /**

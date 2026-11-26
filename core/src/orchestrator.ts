@@ -11,7 +11,7 @@ import { Kernel } from './kernel.js';
 import type { CoreOptions, Listener } from './runtime.js';
 import { getAttachment } from './services/attachments.js';
 import * as chat from './services/chat.js';
-import { listOpencodeModels, testConnection } from './services/connection.js';
+import { listAgyModels, listOpencodeModels, testConnection } from './services/connection.js';
 import { control } from './services/control.js';
 import { cleanStorage, getStorage } from './services/disk.js';
 import { askManager, getManagerChat, getManagerImage, resolveManagerAction } from './services/manager.js';
@@ -28,7 +28,6 @@ import { gitCommitDiff, gitGraph } from './services/gitview.js';
 import type {
   AgentKind,
   ChangeDocs,
-  ChatFile,
   CommandIssue,
   CoreApi,
   CoreCommand,
@@ -352,7 +351,7 @@ export class Orchestrator implements CoreApi {
   createChat(o: Parameters<typeof chat.createChat>[1]) {
     return chat.createChat(this.kernel, o);
   }
-  async updateChat(id: string, patch: Partial<Pick<ChatFile, 'title' | 'agent' | 'model' | 'effort' | 'edits'>>) {
+  async updateChat(id: string, patch: Parameters<typeof chat.updateChat>[2]) {
     return chat.updateChat(this.kernel, id, patch);
   }
   deleteChat(id: string) {
@@ -383,6 +382,9 @@ export class Orchestrator implements CoreApi {
   async listOpencodeModels(dir?: string) {
     return listOpencodeModels(this.kernel, dir);
   }
+  async listAgyModels() {
+    return listAgyModels(this.kernel);
+  }
   async listChatSkills(projectPath?: string) {
     return chat.listChatSkills(this.kernel, projectPath);
   }
@@ -397,6 +399,14 @@ export class Orchestrator implements CoreApi {
     const turn = chat.allowChatMcp(this.kernel, id, tool);
     await Promise.race([turn, new Promise((r) => setTimeout(r, 50))]);
     turn.catch(() => {});
+  }
+  async grantChatFullAccess(id: string): Promise<void> {
+    const turn = chat.grantChatFullAccess(this.kernel, id);
+    await Promise.race([turn, new Promise((r) => setTimeout(r, 50))]);
+    turn.catch(() => {});
+  }
+  async answerChatPermission(id: string, requestId: string, answer: 'once' | 'always' | 'deny') {
+    chat.answerChatPermission(id, requestId, answer);
   }
   stopChat(id: string) {
     return chat.stopChat(this.kernel, id);

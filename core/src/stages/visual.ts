@@ -85,16 +85,8 @@ export async function stageVisual(k: Kernel, run: RunFile) {
     }
     k.log(run, c.mint(`✓ приложение отвечает на ${url}`) + '\n');
 
-    // pw: обёртка над Playwright CLI с отдельной сессией и рабочей папкой для скриншотов.
     const session = `purpleflow-${run.id.slice(0, 8)}`;
-    const isWin = process.platform === 'win32';
-    if (isWin) {
-      fs.writeFileSync(path.join(dir, 'pw.cmd'), `@echo off\r\ncd /d "${dir}"\r\nnpx -y @playwright/cli@latest -s=${session} %*\r\n`);
-    } else {
-      fs.writeFileSync(path.join(dir, 'pw'), `#!/bin/sh\ncd "${dir}" && exec npx -y @playwright/cli@latest -s=${session} "$@"\n`, {
-        mode: 0o755,
-      });
-    }
+    writePw(dir, session);
 
     // Свой Chrome с портом отладки: агент подключается к нему через pw, а окно получает живую трансляцию экрана.
     const live = await startLiveBrowser(k, run, dir, url, serverGroup, session);
@@ -239,17 +231,33 @@ export async function stageVisual(k: Kernel, run: RunFile) {
   } finally {
     cast?.stop();
     k.emit({ type: 'visual.frame', runId: run.id, frame: null });
-    await runProc('npx', ['-y', '@playwright/cli@latest', `-s=purpleflow-${run.id.slice(0, 8)}`, 'close'], {
-      cwd: dir,
-      env: k.opts.env,
-      // «Стоп» прерывает attach, но закрытию сессии даём завершиться.
-      group: `${run.id}:visual-cleanup`,
-      timeoutMs: 20_000,
-    }).catch(() => undefined);
+    // «Стоп» прерывает attach, но закрытию сессии даём завершиться.
+    await closePw(k, dir, `purpleflow-${run.id.slice(0, 8)}`, `${run.id}:visual-cleanup`);
     await killGroup(serverGroup);
     // Профиль Chrome (десятки МБ) после проверки не нужен — скриншоты остаются.
     fs.rmSync(path.join(dir, 'chrome-profile'), { recursive: true, force: true });
   }
+}
+
+/** pw: обёртка над Playwright CLI с отдельной сессией; скриншоты и служебные файлы — в dir, вне репозитория. */
+export function writePw(dir: string, session: string): void {
+  if (process.platform === 'win32') {
+    fs.writeFileSync(path.join(dir, 'pw.cmd'), `@echo off\r\ncd /d "${dir}"\r\nnpx -y @playwright/cli@latest -s=${session} %*\r\n`);
+  } else {
+    fs.writeFileSync(path.join(dir, 'pw'), `#!/bin/sh\ncd "${dir}" && exec npx -y @playwright/cli@latest -s=${session} "$@"\n`, {
+      mode: 0o755,
+    });
+  }
+}
+
+/** Закрыть сессию pw: браузер Playwright живёт отдельно от процессов агента. */
+export async function closePw(k: Kernel, dir: string, session: string, group: string): Promise<void> {
+  await runProc('npx', ['-y', '@playwright/cli@latest', `-s=${session}`, 'close'], {
+    cwd: dir,
+    env: k.opts.env,
+    group,
+    timeoutMs: 20_000,
+  }).catch(() => undefined);
 }
 
 /**

@@ -7,6 +7,7 @@ import { bridge, cleanErr } from '../lib/api';
 import { closeWhatsNew, openWhatsNew, restartForUpdate, useUpdateState, useWhatsNewOpen } from '../lib/update';
 import { Markdown } from './Markdown';
 import { Button } from './ui';
+import { useDialogClose } from '../lib/useDialogClose';
 
 /** Есть что сделать с обновлением: боковая панель показывает кнопку, а не только пункт меню. */
 export const updatePending = (s: UpdateState) => s.kind === 'available' || s.kind === 'downloading' || s.kind === 'ready';
@@ -124,13 +125,14 @@ export function WhatsNewHost() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const close = () => {
+  const closeNow = () => {
     closeWhatsNew();
     if (fresh !== null) {
       setFresh(null);
       void bridge.whatsNew.seen();
     }
   };
+  const { closing, close } = useDialogClose(closeNow);
 
   if (!open) return null;
   const current = versions?.current ?? '';
@@ -138,7 +140,7 @@ export function WhatsNewHost() {
   const isNew = new Set(fresh !== null && current ? releasesBetween(list, fresh, current).map((r) => r.version) : []);
 
   return createPortal(
-    <div className="qs-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+    <div className={`qs-scrim ${closing ? 'is-closing' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="qs wn" role="dialog" aria-modal aria-labelledby="wn-title">
         <header className="qs-head">
           <div>

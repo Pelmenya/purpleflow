@@ -12,7 +12,7 @@
 [![Релиз](https://img.shields.io/github/v/release/PurpleSchool/purpleflow?include_prereleases&label=релиз&color=7c5cff)](https://github.com/PurpleSchool/purpleflow/releases/latest)
 [![Лицензия: MIT](https://img.shields.io/badge/лицензия-MIT-7c5cff)](LICENSE)
 ![Статус: beta](https://img.shields.io/badge/статус-beta-e0a458)
-![macOS · Linux · Windows](https://img.shields.io/badge/macOS_·_Linux_·_Windows_(эксп.)-3b3d45)
+![macOS · Linux · Windows](https://img.shields.io/badge/macOS_·_Linux_·_Windows-3b3d45)
 
 [**Скачать**](https://github.com/PurpleSchool/purpleflow/releases/latest) · [Быстрый старт](#быстрый-старт) · [Руководство](docs/guide.md) · [Архитектура](ARCHITECTURE.md) · [Как участвовать](CONTRIBUTING.md) · [English](README.en.md)
 
@@ -26,7 +26,7 @@
 
 <img src="docs/screenshots/comparison.png" alt="Сравнение: одна модель в терминале и команда моделей с проверками в PurpleFlow" width="900">
 
-Своего агента в PurpleFlow нет: стадии выполняют установленные у вас `claude`, `codex` или `opencode` — любой из них можно выключить в настройках. Через `opencode` подключаются любые провайдеры: OpenRouter, DeepSeek, локальные модели. Приложение отвечает за порядок, проверки и ваши решения.
+Своего агента в PurpleFlow нет: стадии выполняют установленные у вас `claude`, `codex`, `opencode` или `agy` (Antigravity CLI) — любой из них можно выключить в настройках. Через `opencode` подключаются любые провайдеры: OpenRouter, DeepSeek, локальные модели; `agy` (Antigravity CLI) работает через AI-прокси PurpleSchool или через ваш аккаунт Google. Приложение отвечает за порядок, проверки и ваши решения.
 
 ## Как идёт задача
 
@@ -56,7 +56,7 @@ flowchart LR
 | | |
 | --- | --- |
 | **Быстрая настройка** | Выберите основного агента и пресет — «Экономный», «Оптимальный» или «Максимальное качество» — и роли с моделями расставятся сами. Ревьюер всегда работает на другой модели, чем исполнитель. |
-| **Разные модели на разных ролях** | Любую роль можно поправить вручную: планировщику, исполнителю и ревьюеру — свой `claude`, `codex` или `opencode` и своя модель. Больше всего работы на реализации: туда можно поставить модель подешевле, а план и ревью оставить сильной. |
+| **Разные модели на разных ролях** | Любую роль можно поправить вручную: планировщику, исполнителю и ревьюеру — свой `claude`, `codex`, `opencode` или `agy` и своя модель. Больше всего работы на реализации: туда можно поставить модель подешевле, а план и ревью оставить сильной. |
 | **Режимы под задачу** | Быстрая правка, баг (сначала падающий тест), задача, большая задача по этапам, рефакторинг (тесты зелёные до и после). Не знаете, что выбрать, — нажмите «Авто». |
 | **Обязательные проверки** | Тесты и линтер проекта. Команды определяются сами для Node.js, Go, Python и Rust, для остальных указываются вручную. |
 | **Визуальная проверка** | Отдельный агент открывает приложение в браузере и смотрит на результат. |
@@ -68,6 +68,14 @@ flowchart LR
 
 ## Быстрый старт
 
+**Не работали в терминале?** Скачайте установщик: он сам поставит PurpleFlow, Node.js, Git и агентов, а Claude Code, Codex и редакторы подключит к моделям PurpleSchool переключателями.
+
+| macOS | Windows | Linux |
+| --- | --- | --- |
+| [PurpleFlow-Installer.dmg](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer.dmg) | [x64](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x64.exe) · [ARM](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-arm64.exe) | [deb (Ubuntu, Debian)](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-amd64.deb) · [rpm (Fedora, RHEL)](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x86_64.rpm) · [AppImage](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x86_64.AppImage) |
+
+Или по шагам:
+
 **1. Скачайте PurpleFlow** со страницы [Releases](https://github.com/PurpleSchool/purpleflow/releases/latest) для macOS, Windows или Linux. При первом запуске кнопка «Настроить» сама поставит недостающие Node.js, `claude`, `codex` и OpenSpec. Отдельно понадобится только git. Дальше приложение будет предлагать обновления.
 
 Можно поставить агентов и вручную:
@@ -76,6 +84,8 @@ flowchart LR
 npm i -g @anthropic-ai/claude-code @openai/codex @fission-ai/openspec
 # по желанию — opencode и его провайдеры:
 npm i -g opencode-ai && opencode auth login
+# по желанию — Antigravity CLI 1.5+: пакета в npm нет, ставится установщиком Google
+# (https://antigravity.google/docs/cli/install). С AI-прокси PurpleSchool вход в Google не нужен.
 ```
 
 **2. Опишите задачу:** выберите папку проекта и режим. PurpleFlow позовёт вас только на утверждение плана и приёмку.
@@ -98,6 +108,51 @@ npm run dev
 ```
 
 Сборка установщиков и подпись — в [руководстве](docs/guide.md#сборка).
+
+</details>
+
+<details>
+<summary>Windows: проекты внутри WSL</summary>
+
+Если проекты и агенты живут в WSL, запустите внутри WSL Linux-версию PurpleFlow — окно откроется на рабочем столе Windows через WSLg. Тогда git, агенты, тесты и dev-серверы работают в Linux, рядом с кодом.
+
+Нужна WSL 2 с WSLg: Windows 11 или Windows 10 22H2 с WSL из Microsoft Store. В PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Если WSL уже стоит — обновите её, чтобы появился WSLg:
+
+```powershell
+wsl --update
+```
+
+Дальше всё — в терминале Ubuntu. Поставьте git и последнюю версию PurpleFlow из релизов:
+
+```bash
+sudo apt update && sudo apt install -y git curl
+```
+
+```bash
+url=$(curl -s https://api.github.com/repos/PurpleSchool/purpleflow/releases/latest | grep -o 'https://[^"]*/PurpleFlow-[0-9.]*-amd64\.deb')
+```
+
+```bash
+curl -LO "$url" && sudo apt install -y "./$(basename "$url")"
+```
+
+Запуск:
+
+```bash
+purpleflow
+```
+
+При первом запуске кнопка «Настроить» поставит Node.js, агентов и OpenSpec — внутри WSL, отдельно от Windows. Вход в `claude`, `codex` и других агентов тоже свой, в домашней папке WSL.
+
+- Держите проекты в файловой системе Linux (`~/projects`), а не в `/mnt/c`: через `/mnt/c` git и агенты работают в разы медленнее.
+- Встроенный браузер открывает dev-серверы по `localhost`, как обычно.
+- Окно не появилось — выполните в PowerShell `wsl --shutdown` и запустите `purpleflow` снова.
 
 </details>
 
@@ -126,7 +181,7 @@ npm run dev
 | --- | --- |
 | macOS | ✅ проверки и сквозные тесты окна в CI при выпуске версии, живая проверка |
 | Linux | ✅ проверки и сквозные тесты окна в CI |
-| Windows | 🧪 экспериментально: проверки ядра и окна в CI, без сквозных тестов и живой проверки |
+| Windows | ✅ проверки ядра и окна в CI, живая проверка |
 
 ## Участие в проекте
 

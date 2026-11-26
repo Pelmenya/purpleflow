@@ -4,6 +4,12 @@ import type { ChatMessage, ChatPart, ChatToolPart } from './types.js';
 
 export type ChatAnswer = Pick<ChatMessage, 'model' | 'turns' | 'durationMs' | 'info'> & { parts: ChatPart[] };
 
+/**
+ * Отказ ограничений режима правок: так отвечает песочница codex и Claude Code (seatbelt, bubblewrap) на запись в .git,
+ * сигнал чужому процессу, файл вне проекта, — и opencode, когда команду запретило правило permission.bash (сверено с opencode 1.19).
+ */
+const SANDBOX_DENIED = /operation not permitted|rule which prevents you from using this specific tool call/i;
+
 function findTool(parts: ChatPart[], id: string): ChatToolPart | undefined {
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i];
@@ -57,6 +63,7 @@ export function applyStep(a: ChatAnswer, st: AgentStep): void {
       t.status = status;
       if (st.output) t.output = st.output;
       if (st.approval) t.approval = st.approval;
+      if (!st.ok && st.output && SANDBOX_DENIED.test(st.output)) t.sandboxDenied = true;
       return;
     }
     case 'todos': {
@@ -69,6 +76,13 @@ export function applyStep(a: ChatAnswer, st: AgentStep): void {
     case 'question':
       parts.push(defined({ kind: 'question', id: st.id, questions: st.questions }));
       return;
+    case 'permission': {
+      // Повтор с тем же id — ответ человека: карточка остаётся на месте, меняется состояние.
+      const cur = parts.find((p): p is Extract<ChatPart, { kind: 'permission' }> => p.kind === 'permission' && p.id === st.id);
+      if (cur) cur.state = st.state;
+      else parts.push(defined({ kind: 'permission', id: st.id, text: st.text, detail: st.detail, reason: st.reason, state: st.state }));
+      return;
+    }
     case 'notice': {
       const next: ChatPart = defined({ kind: 'notice', level: st.level, text: st.text, key: st.key });
       const i = st.key ? parts.findIndex((p) => p.kind === 'notice' && p.key === st.key) : -1;

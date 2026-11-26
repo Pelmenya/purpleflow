@@ -532,6 +532,93 @@ input.chat-title:focus {
 .chat-notice.is-error {
   color: var(--err);
 }
+/* Плашка под ответом — как баннеры приложения: иконка и текст слева, кнопка справа; в узком окне кнопка уходит вниз. */
+.chat-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-3) var(--s-4);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-5);
+  border-radius: var(--r-l);
+  background: var(--bg-2);
+  animation: rise 0.45s var(--ease);
+}
+.chat-banner > svg {
+  flex: none;
+  color: var(--wait);
+}
+.chat-banner-text {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.chat-banner strong {
+  display: block;
+  font-weight: 500;
+  font-size: var(--fs-13);
+  color: var(--text-1);
+}
+.chat-banner p {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+}
+.chat-banner .btn {
+  flex: none;
+  height: 32px;
+  margin-left: auto;
+}
+.chat-permission .chat-permission-cmd {
+  flex: 1 0 100%;
+  margin: 0;
+  padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-m);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-family: var(--font-code);
+  font-size: var(--fs-12);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow: auto;
+}
+.chat-permission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  flex: 1 0 100%;
+}
+.chat-permission .chat-permission-actions .btn {
+  margin-left: 0;
+}
+.chat-permission-error {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--err);
+  font-size: var(--fs-12);
+}
+.chat-permission-done {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.chat-permission-done > svg {
+  flex: none;
+}
+.chat-permission-done.is-once,
+.chat-permission-done.is-always {
+  color: var(--ok);
+}
+.chat-permission-done code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chat-question {
   display: flex;
   flex-direction: column;
@@ -701,6 +788,14 @@ input.chat-title:focus {
 .amp-agent {
   color: var(--text-2);
 }
+/* Режим чата: полный доступ выделен — агент работает без песочницы. */
+.chat-compose-bar .chat-mode {
+  height: 32px;
+  font-size: var(--fs-12);
+}
+.chat-compose-bar .chat-mode.is-full {
+  color: var(--wait);
+}
 /* Уровень рассуждений — рядом с моделью; «как в CLI» приглушён: флаг не передаётся. */
 .chat-compose-bar .chat-effort {
   height: 32px;
@@ -846,6 +941,10 @@ input.chat-title:focus {
   background: var(--bg-5);
   color: var(--text-2);
   font-size: var(--fs-12);
+}
+.chat-file.is-dir > svg {
+  flex: none;
+  color: var(--accent);
 }
 .chat-file img {
   width: 22px;
@@ -2190,7 +2289,13 @@ body.is-side-resizing webview {
   border-radius: 8px;
   background: var(--accent);
   color: #fff;
-  font: 600 10px/15px var(--font-sans, inherit);
+  /* Отдельными свойствами: var() с запасным inherit в сокращении font делает всё объявление недействительным —
+     бейдж наследовал шрифт кнопки и разъезжался. */
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
@@ -2215,4 +2320,131 @@ body.is-side-resizing webview {
     opacity: 0;
     transform: translate(4px, -50%);
   }
+}
+
+/* Диктовка: кнопка микрофона у поля ввода, ошибка рядом и окно моделей. */
+.dictation-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.dictation-btn:hover {
+  background: var(--bg-5);
+  color: var(--text-1);
+}
+.dictation-btn.is-recording {
+  background: var(--err-wash);
+  color: var(--err);
+  animation: breathe 1.6s var(--ease) infinite;
+}
+.dictation-btn.is-busy {
+  color: var(--accent);
+}
+.dictation-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 340px;
+  color: var(--err);
+  font-size: var(--fs-12);
+}
+.dictation-error button {
+  flex: none;
+  color: var(--text-3);
+}
+.task-foot .task-dictation {
+  margin-left: auto;
+  margin-right: var(--s-3);
+}
+.dictation-models {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  padding: 0 var(--s-6) var(--s-4);
+}
+.dictation-model {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4);
+  border-radius: var(--r-m);
+  background: var(--bg-2);
+}
+.dictation-model.is-on {
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.dictation-model-pick {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s-3);
+  min-width: 0;
+  text-align: left;
+  color: var(--text-1);
+}
+.dictation-model-pick:disabled {
+  cursor: default;
+  color: var(--text-2);
+}
+.dictation-model-pick strong {
+  font-weight: 500;
+}
+.dictation-model-pick small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  line-height: 1.45;
+}
+.dictation-model-size {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+}
+.dictation-model-dot {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--line-2, var(--bg-5));
+  color: var(--accent);
+}
+.dictation-model.is-on .dictation-model-dot {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.dictation-model-del {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  color: var(--text-3);
+}
+.dictation-model-del:hover {
+  background: var(--bg-5);
+  color: var(--err);
+}
+.dictation-model-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  font-variant-numeric: tabular-nums;
+}
+.dictation-lang {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-right: auto;
+  color: var(--text-2);
+  font-size: var(--fs-13);
 }

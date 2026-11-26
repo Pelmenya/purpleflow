@@ -6,6 +6,7 @@ import path from 'node:path';
 import { runClaude } from './agents/claude.js';
 import { runCodex } from './agents/codex.js';
 import { runOpencode } from './agents/opencode.js';
+import { runAgy } from './agents/agy.js';
 import { type AgentResult, addUsage, c, crlf, emptyUsage } from './agents/common.js';
 import { detectTools } from './env.js';
 import { run as runProc, setPidTracker } from './proc.js';
@@ -255,6 +256,7 @@ export class Kernel {
       claude: found.claude.path!,
       codex: found.codex.path!,
       opencode: found.opencode.path!,
+      agy: found.agy.path!,
       openspec: found.openspec.path!,
     };
   }
@@ -277,6 +279,10 @@ export class Kernel {
 
   opencode(o: Parameters<typeof runOpencode>[0]) {
     return (this.opts.runners?.opencode ?? runOpencode)(o);
+  }
+
+  agy(o: Parameters<typeof runAgy>[0]) {
+    return (this.opts.runners?.agy ?? runAgy)(o);
   }
 
   shell(run: RunFile, command: string, timeoutMin: number) {

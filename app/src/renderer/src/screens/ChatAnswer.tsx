@@ -13,12 +13,18 @@ import {
   LockOpen,
   LoaderCircle,
   MessageCircleQuestion,
+  ShieldAlert,
+  ShieldCheck,
+  ShieldQuestion,
+  ShieldX,
+  ShieldOff,
   TriangleAlert,
   Wrench,
   X,
 } from 'lucide-react';
-import type { ChatMessage, ChatPart, ChatQuestion, ChatToolPart, ToolStatus } from '@purpleflow/core';
+import type { ChatMessage, ChatPart, ChatPermissionPart, ChatQuestion, ChatToolPart, ToolStatus } from '@purpleflow/core';
 import { Markdown } from '../components/Markdown';
+import { Button } from '../components/ui';
 import { cleanErr } from '../lib/api';
 import { answerFooter, answerText, chatBlocks, shownTools } from '../lib/chatBlocks';
 
@@ -31,14 +37,24 @@ export function AssistantMessage({
   answerable,
   onAnswer,
   onAllowMcp,
+  onGrantFull,
+  onPermission,
 }: {
   m: ChatMessage;
   answerable: boolean;
   onAnswer: (text: string) => void;
   onAllowMcp?: (t: McpApproval, always: boolean) => void;
+  /** Чат в режиме правок: отказ песочницы можно снять полным доступом. */
+  onGrantFull?: () => void;
+  /** Ответ на запрос разрешения agy, пока ход идёт. */
+  onPermission?: (requestId: string, answer: 'once' | 'always' | 'deny') => Promise<void>;
 }) {
   const blocks = chatBlocks(m);
   const refused = m.pending ? [] : refusedMcp(blocks);
+  const sandboxed =
+    !m.pending &&
+    Boolean(onGrantFull) &&
+    (m.needsFullAccess || blocks.some((b) => b.kind === 'tools' && b.items.some((t) => t.sandboxDenied)));
   const live = Boolean(m.pending);
   const tail = blocks[blocks.length - 1];
   const footer = live ? [] : answerFooter(m);
@@ -57,6 +73,8 @@ export function AssistantMessage({
             return <Notice key={i} level={b.level} text={b.text} />;
           case 'question':
             return <QuestionCard key={i} questions={b.questions} answerable={answerable} onAnswer={onAnswer} />;
+          case 'permission':
+            return <PermissionCard key={b.id} p={b} live={live} onAnswer={onPermission} />;
           default:
             return <Markdown key={i} className="md chat-md" source={b.text} />;
         }
@@ -69,6 +87,22 @@ export function AssistantMessage({
           onAllow={(a) => onAllowMcp?.(t, a)}
         />
       ))}
+      {sandboxed && (
+        <div className="chat-banner">
+          <ShieldAlert size={16} />
+          <div className="chat-banner-text">
+            <strong>Нужен полный доступ</strong>
+            <p>
+              В режиме «Правки» закрыты запись в <code>.git</code>, остановка процессов и файлы вне проекта.
+            </p>
+          </div>
+          {answerable && (
+            <Button tone="ghost" icon={<ShieldOff size={14} />} onClick={onGrantFull}>
+              Дать доступ и повторить
+            </Button>
+          )}
+        </div>
+      )}
       {live && (!tail || (tail.kind !== 'text' && tail.kind !== 'thinking')) && (
         <div className="chat-typing" aria-label="Агент отвечает">
           <i />
@@ -210,6 +244,71 @@ function refusedMcp(blocks: ReturnType<typeof chatBlocks>): McpApproval[] {
 }
 
 /** codex exec не умеет спросить человека: разрешение даём после отказа и просим повторить вызов. */
+const PERMISSION_DONE: Record<Exclude<ChatPermissionPart['state'], 'pending'>, string> = {
+  once: 'Разрешено один раз',
+  always: 'Разрешено в этом чате',
+  denied: 'Отклонено',
+  expired: 'Ответ не понадобился — ход закончился',
+};
+
+/** Агент просит действие, которое режим «Правки» не пускает: решение — здесь же, агент ждёт. */
+function PermissionCard({
+  p,
+  live,
+  onAnswer,
+}: {
+  p: ChatPermissionPart;
+  live: boolean;
+  onAnswer?: (requestId: string, answer: 'once' | 'always' | 'deny') => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const waiting = p.state === 'pending' && live && Boolean(onAnswer);
+  if (p.state !== 'pending' || !live) {
+    const state = p.state === 'pending' ? 'expired' : p.state;
+    const Icon = state === 'denied' ? ShieldX : state === 'expired' ? ShieldAlert : ShieldCheck;
+    return (
+      <div className={`chat-permission-done is-${state}`}>
+        <Icon size={13} />
+        <span>{PERMISSION_DONE[state]}:</span>
+        <code>{p.detail ?? p.text}</code>
+      </div>
+    );
+  }
+  const answer = (a: 'once' | 'always' | 'deny') => {
+    setBusy(a);
+    setError('');
+    onAnswer?.(p.id, a).catch((e) => {
+      setBusy(null);
+      setError(cleanErr(e));
+    });
+  };
+  return (
+    <div className="chat-banner chat-permission" role="group" aria-label="Агент просит разрешение">
+      <ShieldQuestion size={16} />
+      <div className="chat-banner-text">
+        <strong>Агент просит разрешение</strong>
+        <p>В режиме «Правки» {p.reason.replace(/^стадия только читает: /, '')}. Агент ждёт вашего решения.</p>
+      </div>
+      <pre className="chat-permission-cmd">{p.detail ?? p.text}</pre>
+      {waiting && (
+        <div className="chat-permission-actions">
+          <Button tone="primary" busy={busy === 'once'} disabled={Boolean(busy)} onClick={() => answer('once')}>
+            Разрешить
+          </Button>
+          <Button tone="ghost" busy={busy === 'always'} disabled={Boolean(busy)} onClick={() => answer('always')}>
+            Разрешать в этом чате
+          </Button>
+          <Button tone="quiet" busy={busy === 'deny'} disabled={Boolean(busy)} onClick={() => answer('deny')}>
+            Отклонить
+          </Button>
+        </div>
+      )}
+      {error && <p className="chat-permission-error">{error}</p>}
+    </div>
+  );
+}
+
 function McpApprovalCard({ t, answerable, onAllow }: { t: McpApproval; answerable: boolean; onAllow: (always: boolean) => void }) {
   return (
     <div className="chat-question chat-mcp-approval">

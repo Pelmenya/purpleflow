@@ -1,0 +1,971 @@
+/*
+  Стиль PurpleFlow (app/src/renderer/src/styles): тихий графит, тёмные плоские плашки без рамок,
+  один акцент PurpleSchool, шрифт Geist. Токены и контролы — те же, что в приложении.
+*/
+@import '@fontsource-variable/geist';
+
+:root {
+  color-scheme: dark;
+  --bg-window: #0a0b0d;
+  --bg-1: #0c0d0f;
+  --bg-2: #0e0f11;
+  --bg-3: #131416;
+  --bg-4: #18191c;
+  --bg-5: #212226;
+  --line: rgba(255, 255, 255, 0.045);
+  --line-2: rgba(255, 255, 255, 0.085);
+  --line-3: rgba(255, 255, 255, 0.14);
+  --text-1: #e9e9eb;
+  --text-2: #a3a5ac;
+  --text-3: #6d6f77;
+  --text-4: #47494f;
+  --accent: #8a74ee;
+  --accent-hi: #b2a5f5;
+  --accent-wash: rgba(138, 116, 238, 0.1);
+  --accent-line: rgba(138, 116, 238, 0.42);
+  --ok: #74c4a0;
+  --err: #df7e8d;
+  --ok-wash: rgba(116, 196, 160, 0.08);
+  --font-ui: 'Geist Variable', 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --fs-11: 11.5px;
+  --fs-12: 12.5px;
+  --fs-13: 13.5px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 21px;
+  --fs-28: 28px;
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --r-s: 9px;
+  --r-m: 12px;
+  --r-l: 16px;
+  --r-pill: 999px;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg-window);
+  color: var(--text-1);
+  font: 400 var(--fs-14) / 1.55 var(--font-ui);
+  letter-spacing: -0.003em;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  cursor: default;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+button:disabled {
+  cursor: default;
+}
+input {
+  font: inherit;
+  color: inherit;
+  user-select: text;
+}
+p,
+h1,
+h2 {
+  text-wrap: pretty;
+}
+:focus-visible {
+  outline: 1.5px solid var(--accent-hi);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+::selection {
+  background: rgba(138, 116, 238, 0.32);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background: rgba(255, 255, 255, 0.07) padding-box;
+}
+:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+.drag {
+  -webkit-app-region: drag;
+}
+.drag button,
+.drag input {
+  -webkit-app-region: no-drag;
+}
+
+/* ——— Раскладка: слева настройка, справа аккаунт ——— */
+#root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+}
+.setup {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: 44px var(--s-8) var(--s-6);
+}
+.side {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 44px var(--s-6) var(--s-6);
+  background: var(--bg-2);
+}
+h1 {
+  margin: 0 0 var(--s-2);
+  font-size: var(--fs-28);
+  font-weight: 400;
+  letter-spacing: -0.03em;
+}
+.lead {
+  margin: 0 0 var(--s-5);
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+}
+.section {
+  margin: var(--s-5) 0 var(--s-2);
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 0 8px 4px;
+}
+
+/* Обязательное — одна плашка без выбора */
+.reqs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-5);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-m);
+  background: var(--bg-3);
+}
+.reqs-title {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  font-weight: 500;
+}
+.req {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  font-size: var(--fs-13);
+}
+.req-status {
+  color: var(--text-3);
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.req.failed .req-status {
+  color: var(--err);
+  white-space: normal;
+}
+.req.waiting .req-status {
+  color: var(--accent-hi);
+  white-space: normal;
+}
+
+/* Список с галочками */
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-radius: var(--r-m);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.crow {
+  display: flex;
+  gap: var(--s-3);
+  align-items: flex-start;
+  padding: var(--s-3) var(--s-4);
+  cursor: pointer;
+  transition: background 0.3s var(--ease);
+}
+.crow:hover:not(.locked) {
+  background: var(--bg-4);
+}
+.crow.locked {
+  cursor: default;
+}
+.crow + .crow {
+  border-top: 1px solid var(--line);
+}
+.cbody {
+  flex: 1;
+  min-width: 0;
+}
+.cname {
+  font-size: var(--fs-14);
+  font-weight: 500;
+}
+.chint {
+  margin-left: var(--s-2);
+  font-weight: 400;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+}
+.pf-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  flex: none;
+}
+.cstatus {
+  display: block;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  overflow-wrap: anywhere;
+}
+.cstatus.ok {
+  color: var(--ok);
+}
+.cstatus.err {
+  color: var(--err);
+}
+.cstatus.pending,
+.cstatus.run {
+  color: var(--accent-hi);
+}
+
+/* Галочка — как в форме регистрации PurpleFlow (.auth-check) */
+input[type='checkbox'] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 3px 0 0;
+  flex: none;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px var(--line-3);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+input[type='checkbox']:checked {
+  background: var(--accent);
+  box-shadow: none;
+}
+input[type='checkbox']:checked::after {
+  content: '';
+  width: 8px;
+  height: 4px;
+  margin-top: -2px;
+  border: solid #fff;
+  border-width: 0 0 1.5px 1.5px;
+  transform: rotate(-45deg);
+}
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+
+.bar {
+  height: 3px;
+  margin-top: var(--s-2);
+  border-radius: 2px;
+  background: var(--bg-5);
+  overflow: hidden;
+}
+.bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+.mark {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  flex: none;
+}
+.mark.ok {
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+.mark.err {
+  background: rgba(223, 126, 141, 0.14);
+  color: var(--err);
+}
+.mark.todo {
+  box-shadow: inset 0 0 0 1px var(--line-3);
+}
+.mark.spin,
+.spinner {
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  color: var(--accent-hi);
+  animation: spin 0.8s linear infinite;
+}
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex: none;
+  color: inherit;
+  opacity: 0.75;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.notes {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* ——— Кнопки и поля — как в PurpleFlow ——— */
+footer {
+  padding-top: var(--s-4);
+}
+.note {
+  margin: 0 0 var(--s-3);
+  color: var(--text-3);
+  font-size: var(--fs-13);
+}
+.note.err {
+  color: var(--err);
+}
+.btn {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: 38px;
+  padding: 0 var(--s-5);
+  border-radius: var(--r-pill);
+  font-weight: 500;
+  font-size: var(--fs-13);
+  white-space: nowrap;
+  transition:
+    background 0.3s var(--ease),
+    transform 0.2s var(--ease),
+    opacity 0.3s var(--ease);
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.35;
+}
+.btn-primary {
+  color: #fff;
+  background: var(--accent);
+  padding: 0 var(--s-6);
+}
+.btn-primary:hover:not(:disabled) {
+  background: #9683f3;
+}
+.btn-ghost {
+  background: var(--bg-5);
+  color: var(--text-1);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+.btn-wide {
+  width: 100%;
+  height: 42px;
+}
+.link {
+  padding: 0;
+  color: var(--accent-hi);
+  font-size: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-color: color-mix(in srgb, var(--accent-hi) 40%, transparent);
+}
+.link.small {
+  margin-top: 4px;
+  font-size: var(--fs-12);
+}
+.links {
+  display: flex;
+  justify-content: center;
+  gap: var(--s-5);
+  margin-top: var(--s-3);
+  font-size: var(--fs-13);
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  min-width: 0;
+}
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.field-label {
+  font-size: var(--fs-12);
+  font-weight: 500;
+  color: var(--text-3);
+}
+.field-hint {
+  font-size: var(--fs-12);
+  color: var(--text-4);
+}
+.input {
+  width: 100%;
+  height: 42px;
+  padding: 0 var(--s-4);
+  border-radius: var(--r-m);
+  border: 0;
+  outline: 0;
+  background: var(--bg-1);
+  color: var(--text-1);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: box-shadow 0.3s var(--ease);
+}
+.input::placeholder {
+  color: var(--text-4);
+}
+.input:hover {
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.input:focus {
+  box-shadow:
+    inset 0 0 0 1px var(--accent-line),
+    0 0 0 3px var(--accent-wash);
+}
+
+/* ——— Аккаунт (форма — как AuthForms в PurpleFlow) ——— */
+.auth {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+.auth h2,
+.acc h2 {
+  margin: 0 0 var(--s-1);
+  font-size: var(--fs-20);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+.auth-sub {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: 1.6;
+}
+.auth-sub strong {
+  color: var(--text-1);
+  font-weight: 500;
+}
+.auth-aside {
+  font-size: var(--fs-12);
+}
+.auth-checks {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.auth-check {
+  display: flex;
+  gap: var(--s-2);
+  align-items: flex-start;
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  line-height: 1.45;
+  cursor: pointer;
+}
+.auth-check input {
+  margin-top: 2px;
+}
+.auth-error {
+  margin: 0;
+  color: var(--err);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+}
+.auth-notice {
+  margin: 0;
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-m);
+  background: var(--ok-wash);
+  color: var(--ok);
+  font-size: var(--fs-13);
+  line-height: 1.55;
+}
+.auth-switch {
+  margin: 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  text-align: center;
+}
+.acc {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+/* Профиль — как карточка аккаунта PurpleFlow (.acc-profile) */
+.acc-profile {
+  display: flex;
+  gap: var(--s-3);
+  align-items: center;
+  padding: var(--s-4);
+  border-radius: var(--r-l);
+  background: var(--bg-3);
+}
+.acc-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #b46ee8, var(--accent) 55%, #5b46c9);
+  color: #fff;
+  font-size: 18px;
+  font-weight: 500;
+  box-shadow: 0 0 0 4px var(--accent-wash);
+}
+.acc-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.acc-profile-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.acc-profile-text strong {
+  font-weight: 500;
+  font-size: var(--fs-14);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.acc-profile-text span {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.btn-quiet {
+  color: var(--text-2);
+  padding: 0 var(--s-3);
+}
+.btn-quiet:hover:not(:disabled) {
+  background: var(--bg-4);
+  color: var(--text-1);
+}
+.benefits {
+  list-style: none;
+  margin: auto 0 0;
+  padding: var(--s-5) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-3);
+}
+.benefits li {
+  color: var(--text-3);
+  font-size: var(--fs-13);
+  line-height: 1.5;
+}
+.benefits b {
+  display: block;
+  color: var(--text-2);
+  font-weight: 500;
+}
+
+/* ——— Строка инструмента: иконка, название и статус, справа галочки по моделям ——— */
+.tool {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+}
+.tool + .tool {
+  border-top: 1px solid var(--line);
+}
+.ticon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  flex: none;
+  box-shadow: inset 0 0 0 1px var(--line-2);
+}
+.tool .cname {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.35;
+}
+.tool .chint {
+  margin: 2px 0 0;
+  font-size: var(--fs-12);
+}
+.pills {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+/* Переключатель — как в PurpleFlow (app/src/renderer/src/styles/motion.css, «Переключатель») */
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-3);
+  height: 34px;
+  padding: 0 var(--s-4) 0 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: var(--fs-13);
+  font-weight: 500;
+  flex: none;
+  min-width: 120px;
+  transition: background 0.3s var(--ease);
+}
+.switch:hover:not(:disabled) {
+  background: var(--bg-1);
+}
+.switch i {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  background: var(--bg-5);
+  box-shadow: inset 0 0 0 1px var(--line);
+  transition: background 0.35s var(--ease);
+}
+.switch i::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #d6d7dc;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  transition:
+    transform 0.45s var(--ease),
+    background 0.3s var(--ease),
+    width 0.2s var(--ease);
+}
+.switch.is-on i {
+  background: var(--accent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.switch.is-on i::after {
+  transform: translateX(18px);
+  background: #fff;
+}
+.switch.is-on {
+  color: var(--text-1);
+}
+.switch:active:not(:disabled) i::after {
+  width: 24px;
+}
+.switch.is-on:active:not(:disabled) i::after {
+  transform: translateX(14px);
+}
+.switch:disabled {
+  opacity: 0.55;
+}
+
+/* Выключенный инструмент — серый: не подключён и включать его не собираются */
+.tool {
+  transition: opacity 0.3s var(--ease);
+}
+.tool .ticon,
+.tool .cname {
+  transition:
+    filter 0.3s var(--ease),
+    opacity 0.3s var(--ease),
+    color 0.3s var(--ease);
+}
+.tool.dim .ticon {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+.tool.dim .cname {
+  color: var(--text-3);
+}
+.tool.dim .chint {
+  color: var(--text-4);
+}
+.tool .cstatus {
+  margin-top: 2px;
+}
+/* Не применено — тонкая обводка акцентом; настраивается — ползунок пульсирует */
+.switch.is-pending {
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.switch.is-busy i::after {
+  animation: knob 1s var(--ease) infinite alternate;
+}
+.switch:disabled.is-busy {
+  opacity: 1;
+}
+@keyframes knob {
+  to {
+    opacity: 0.35;
+  }
+}
+
+/* ——— Окно хода настройки ——— */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  padding: var(--s-8);
+  background: rgba(5, 6, 8, 0.62);
+  backdrop-filter: blur(8px);
+  animation: fade 0.25s var(--ease);
+}
+.modal {
+  width: min(480px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+  padding: var(--s-6);
+  border-radius: 22px;
+  background: var(--bg-3);
+  box-shadow:
+    0 24px 60px -24px rgba(0, 0, 0, 0.75),
+    0 0 0 1px var(--line-2);
+  animation: rise 0.35s var(--ease);
+}
+.modal-head {
+  display: flex;
+  gap: var(--s-4);
+  align-items: center;
+}
+.modal-head h2 {
+  margin: 0;
+  font-size: var(--fs-20);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+.modal-head p {
+  margin: 2px 0 0;
+  color: var(--text-3);
+  font-size: var(--fs-13);
+}
+.modal-badge {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 600;
+}
+.modal-badge.run {
+  background: var(--accent-wash);
+  color: var(--accent-hi);
+}
+.modal-badge.run .spinner {
+  width: 20px;
+  height: 20px;
+}
+.modal-badge.ok {
+  background: var(--ok-wash);
+  color: var(--ok);
+  box-shadow: 0 0 0 4px rgba(116, 196, 160, 0.06);
+  animation: pop 0.45s var(--ease);
+}
+.modal-badge.err {
+  background: rgba(223, 126, 141, 0.12);
+  color: var(--err);
+  animation: pop 0.45s var(--ease);
+}
+.tasks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border-radius: var(--r-m);
+  background: var(--bg-2);
+}
+.task {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  transition: opacity 0.3s var(--ease);
+}
+.task + .task {
+  border-top: 1px solid var(--line);
+}
+.task.wait {
+  opacity: 0.5;
+}
+.task-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  flex: none;
+}
+.task-icon.blank {
+  background: var(--bg-5);
+}
+.task-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.task-title {
+  font-size: var(--fs-13);
+  font-weight: 500;
+}
+.task-text {
+  color: var(--text-3);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.task.run .task-text {
+  color: var(--accent-hi);
+}
+.task.ok .task-text {
+  color: var(--ok);
+}
+.task.err .task-text {
+  color: var(--err);
+}
+.task .spinner {
+  color: var(--accent-hi);
+}
+.task .mark.ok {
+  animation: pop 0.4s var(--ease);
+}
+.modal-actions:empty {
+  display: none;
+}
+.task-mark {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex: none;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s-2);
+}
+.modal-actions .btn-primary {
+  min-width: 96px;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+@keyframes pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+  }
+}
+
+/* ——— Новая версия установщика ——— */
+.upd {
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-m);
+  background: var(--accent-wash);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  animation: rise 0.35s var(--ease);
+}
+.upd-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.upd-body b {
+  font-weight: 500;
+  font-size: var(--fs-13);
+}
+.upd-body span {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  overflow-wrap: anywhere;
+}
+.upd-body span.err {
+  color: var(--err);
+}
+.upd-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex: none;
+}
+.upd .spinner {
+  color: var(--accent-hi);
+}

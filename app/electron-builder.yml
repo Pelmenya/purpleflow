@@ -10,6 +10,9 @@ files:
 extraResources:
   - from: ../core/prompts
     to: prompts
+  # Диктовка: whisper-cli из scripts/build-whisper.mjs (macOS — универсальный, Windows и Linux — x64).
+  - from: whisper-bin/${os}
+    to: whisper
 asarUnpack: []
 npmRebuild: false
 # Канал обновлений: окно читает latest*.yml из опубликованного релиза. Черновики electron-updater не видит.
@@ -21,6 +24,8 @@ publish:
   vPrefixedTagName: false
 mac:
   category: public.app-category.developer-tools
+  # Фон во всё поле: так macOS 26+ не сажает значок в светлую подложку.
+  icon: build/icon-mac.png
   target:
     - target: dmg
       arch: [arm64, x64]
@@ -33,6 +38,9 @@ mac:
   # Подпись: сертификат «Developer ID Application» из связки ключей (или CSC_LINK/CSC_KEY_PASSWORD).
   # Нотаризация: APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER или APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID.
   notarize: true
+  # Диктовка: без описания macOS не покажет запрос доступа к микрофону.
+  extendInfo:
+    NSMicrophoneUsageDescription: PurpleFlow записывает голос только для диктовки — речь распознаётся на этом компьютере.
 dmg:
   artifactName: PurpleFlow-${version}-${arch}.dmg
 win:

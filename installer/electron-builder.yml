@@ -1,0 +1,58 @@
+appId: ru.purpleschool.purpleflow.installer
+electronVersion: 44.5.1
+productName: Установщик PurpleFlow
+directories:
+  output: release
+  # Свой значок установщика (build/icon.png из дизайна PurpleSchool); entitlements — общие с PurpleFlow.
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+extraResources:
+  # Значок для ярлыка PurpleFlow на Linux.
+  - from: ../app/build/icon.png
+    to: icon.png
+asarUnpack: []
+npmRebuild: false
+# Установщик не обновляется сам: каждый запуск берёт последний опубликованный выпуск PurpleFlow.
+publish: null
+mac:
+  category: public.app-category.developer-tools
+  # Фон во всё поле: так macOS 26+ не сажает значок в светлую подложку.
+  icon: build/icon-mac.png
+  target:
+    - target: dmg
+      arch: [universal]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: ../app/build/entitlements.mac.plist
+  entitlementsInherit: ../app/build/entitlements.mac.plist
+  notarize: true
+dmg:
+  artifactName: PurpleFlow-Installer.dmg
+win:
+  # Один exe без собственной установки: скачал, запустил, закрыл.
+  target:
+    - target: portable
+      arch: [x64, arm64]
+  artifactName: PurpleFlow-Installer-${arch}.exe
+linux:
+  executableName: purpleflow-installer
+  # Ubuntu и Debian — deb; Fedora, RHEL, openSUSE — rpm; AppImage — для остальных. Собирается на Linux (CI):
+  # на Mac для AppImage нужен Rosetta, для rpm — rpmbuild.
+  target: [deb, rpm, AppImage]
+  category: Development
+  maintainer: PurpleSchool
+  artifactName: PurpleFlow-Installer-${arch}.${ext}
+  # Сборка для Linux идёт с латинским productName (scripts/dist.mjs) — в меню показываем русское название.
+  desktop:
+    entry:
+      Name: Установщик PurpleFlow
+      Comment: Ставит PurpleFlow и подключает агентов к моделям PurpleSchool
+deb:
+  # Имя пакета — только латиница: по умолчанию electron-builder берёт productName («Установщик PurpleFlow»),
+  # и dpkg отказывается ставить пакет. В меню приложений название остаётся русским.
+  packageName: purpleflow-installer
+rpm:
+  # То же для rpm: имя пакета — латиницей, как у deb.
+  packageName: purpleflow-installer

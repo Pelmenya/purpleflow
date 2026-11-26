@@ -179,6 +179,7 @@ const VERSION_ARGS: Record<ToolName, string[]> = {
   claude: ['--version'],
   codex: ['--version'],
   opencode: ['--version'],
+  agy: ['--version'],
   openspec: ['--version'],
 };
 
@@ -200,7 +201,7 @@ export async function detectTools(
   env: NodeJS.ProcessEnv,
   manual: Partial<Record<ToolName, string>> = {},
 ): Promise<Record<ToolName, ToolInfo>> {
-  const names: ToolName[] = ['git', 'claude', 'codex', 'opencode', 'openspec'];
+  const names: ToolName[] = ['git', 'claude', 'codex', 'opencode', 'agy', 'openspec'];
   const list = await Promise.all(names.map((n) => detectTool(n, env, manual[n])));
   return Object.fromEntries(list.map((t) => [t.name, t])) as Record<ToolName, ToolInfo>;
 }

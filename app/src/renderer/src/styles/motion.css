@@ -439,3 +439,84 @@ html[data-material] .tab.is-on {
 .role p {
   min-height: 0;
 }
+
+/* ——— Закрытие диалогов: окно уходит, а не пропадает (useDialogClose, DIALOG_CLOSE_MS) ——— */
+@keyframes fadeOut {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes dialogOut {
+  to {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+}
+.qs-scrim.is-closing {
+  animation: fadeOut 0.18s var(--ease) both;
+  pointer-events: none;
+}
+.qs-scrim.is-closing .qs {
+  animation: dialogOut 0.18s var(--ease) both;
+}
+
+/* ——— Раскрытие внутри ответа чата: вызовы, их вывод, размышления ——— */
+@keyframes expandIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.chat-tool-wrap,
+.chat-tool-more,
+.chat-thinking > p {
+  animation: expandIn 0.22s var(--ease) both;
+}
+
+/* ——— Карточки и строки, которые появляются по ходу ответа ——— */
+.chat-question,
+.chat-notice,
+.chat-permission-done {
+  animation: rise 0.35s var(--ease) both;
+}
+/* Значки вложений и папок над полем ввода — как файлы на приёмке. */
+.chat-file {
+  animation: cardIn 0.3s var(--ease) both;
+}
+
+/* ——— Ошибки появляются мягко, а не скачком ——— */
+.chat-msg-error,
+.chat-error,
+.chat-run-error,
+.chat-permission-error,
+.dictation-error,
+.inline-error,
+.actionbar-error,
+.auth-error,
+.setup-error,
+.imgdrop-error,
+.manager-error,
+.stats-error,
+.pop-error,
+.merge-error,
+.browser-error {
+  animation: rise 0.3s var(--ease) both;
+}
+
+/* ——— Новые строки боковой панели и баннеры ——— */
+.side-run {
+  animation: rise 0.3s var(--ease) both;
+}
+.trial-banner,
+.unstable-banner {
+  animation: rise 0.45s var(--ease) both;
+}
+
+/* Поле ввода чата растёт плавно (высоту ставит Chat.tsx). */
+.chat-compose textarea {
+  transition: height 0.12s var(--ease);
+}

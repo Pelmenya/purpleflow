@@ -1,8 +1,8 @@
 import type { AgentKind, Role, ToolName } from '@purpleflow/core';
 
-export const AGENT_KINDS: AgentKind[] = ['claude', 'codex', 'opencode'];
+export const AGENT_KINDS: AgentKind[] = ['claude', 'codex', 'opencode', 'agy'];
 
-/** Включённые CLI-агенты; не задано или пусто — claude и codex (opencode — по желанию). */
+/** Включённые CLI-агенты; не задано или пусто — claude и codex (opencode и agy — по желанию). */
 export function enabledList(enabled?: AgentKind[]): AgentKind[] {
   const list = AGENT_KINDS.filter((a) => enabled?.includes(a));
   return list.length ? list : ['claude', 'codex'];

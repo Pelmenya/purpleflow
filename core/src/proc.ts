@@ -9,6 +9,11 @@ export interface RunOptions {
   env: NodeJS.ProcessEnv;
   /** Текст в stdin; без него stdin закрывается сразу. */
   input?: string;
+  /**
+   * Диалог по stdin (JSON-RPC): stdin остаётся открытым, закрывает его сам вызывающий. Сильнее input.
+   * pauseIdle — пока процесс ждёт ответа человека, его молчание не считается зависанием.
+   */
+  onStdin?: (stdin: Writable, ctl: { pauseIdle: (paused: boolean) => void }) => void;
   /** Запуск строки через системный шелл (команда тестов). */
   shell?: boolean;
   timeoutMs?: number;
@@ -75,10 +80,13 @@ export function parseEtime(s: string): number | null {
 /** Процесс начался уже после того, как PID был записан: номер достался кому-то другому. */
 async function startedAfter(pid: number, recordedAt: number): Promise<boolean> {
   if (process.platform === 'win32') return false;
+  // Время — до запуска ps: на загруженной машине он отвечает секундами, и «сейчас» после него сдвинуло бы начало процесса
+  // позже записи — свой процесс выглядел бы чужим и пережил бы восстановление.
+  const now = Date.now();
   const r = await run('ps', ['-o', 'etime=', '-p', String(pid)], { cwd: process.cwd(), env: process.env, timeoutMs: 5000 });
   const age = parseEtime(r.stdout);
   // Запас в пару секунд: и секунды ps, и время файла округлены.
-  return age != null && Date.now() - age * 1000 > recordedAt + 2000;
+  return age != null && now - age * 1000 > recordedAt + 2000;
 }
 
 /**
@@ -234,9 +242,12 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
     let idle = false;
     let spawnError: string | undefined;
     let idleTimer: NodeJS.Timeout | null = null;
+    let idlePaused = 0;
     const touch = () => {
       if (!opts.idleTimeoutMs) return;
       if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+      if (idlePaused > 0) return;
       idleTimer = setTimeout(() => {
         timedOut = true;
         idle = true;
@@ -270,7 +281,12 @@ export function run(cmd: string, args: string[], opts: RunOptions): Promise<RunR
     child.stdin?.on('error', () => {
       /* процесс мог закрыть stdin раньше */
     });
-    if (opts.input != null) child.stdin?.end(opts.input);
+    const pauseIdle = (paused: boolean) => {
+      idlePaused = Math.max(0, idlePaused + (paused ? 1 : -1));
+      touch();
+    };
+    if (opts.onStdin && child.stdin) opts.onStdin(child.stdin, { pauseIdle });
+    else if (opts.input != null) child.stdin?.end(opts.input);
     else child.stdin?.end();
 
     const timer = opts.timeoutMs

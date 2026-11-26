@@ -21,7 +21,12 @@ export async function testConnection(k: Kernel): Promise<ConnectionCheck[]> {
       on.length === 1 ? `Не найден ${on[0]}. Укажите путь в настройках.` : 'Не найдены ни claude, ни codex. Укажите пути в настройках.',
     );
   }
-  const tools: Record<AgentKind, string> = { claude: found.claude.path!, codex: found.codex.path!, opencode: found.opencode.path! };
+  const tools: Record<AgentKind, string> = {
+    claude: found.claude.path!,
+    codex: found.codex.path!,
+    opencode: found.opencode.path!,
+    agy: found.agy.path!,
+  };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-check-'));
   const proxy = s.proxy.baseUrl ? s.proxy : undefined;
   const prompt = 'Это проверка подключения. Ответь ровно одним словом: готово';
@@ -48,7 +53,9 @@ export async function testConnection(k: Kernel): Promise<ConnectionCheck[]> {
         ? await k.claude(base)
         : agent === 'opencode'
           ? await k.opencode({ ...base, readOnly: true })
-          : await k.codex({ ...base, sandbox: 'read-only' });
+          : agent === 'agy'
+            ? await k.agy({ ...base, readOnly: true })
+            : await k.codex({ ...base, sandbox: 'read-only' });
     return {
       agent,
       ok: r.ok,
@@ -61,9 +68,28 @@ export async function testConnection(k: Kernel): Promise<ConnectionCheck[]> {
   try {
     return await Promise.all(present.map(one));
   } finally {
-    // На Windows процесс агента может ещё держать файлы папки — несколько повторов вместо ошибки проверки.
-    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    removeLater(dir);
   }
+}
+
+/**
+ * Убрать временную папку проверки, не роняя саму проверку. На Windows папку держит процесс, для которого она текущая:
+ * агент, его фоновый сервер (opencode 2) — и rmdir отвечает EPERM, пока он не выйдет. Пробуем сразу, потом ещё раз позже;
+ * не вышло — папка остаётся во временном каталоге системы, это не ошибка подключения.
+ */
+export function removeLater(dir: string, delaysMs = [5_000, 30_000]): void {
+  const attempt = () => {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (attempt()) return;
+  const [next, ...rest] = delaysMs;
+  if (next === undefined) return;
+  setTimeout(() => removeLater(dir, rest), next).unref();
 }
 
 const modelsCache = new Map<string, { at: number; list: Promise<string[]> }>();
@@ -97,6 +123,37 @@ export async function listOpencodeModels(k: Kernel, dir?: string): Promise<strin
           ]
         : [],
     );
+  modelsCache.set(key, { at: Date.now(), list });
+  list.catch(() => modelsCache.delete(key));
+  return list;
+}
+
+/**
+ * Модели agy без прокси: `agy models` печатает «слаг<TAB>название» — слаги зависят от тарифа Google-аккаунта,
+ * поэтому встроенный список быстро устаревает. Список идёт через сеть, поэтому кэш на минуту
+ * и никакой блокировки окна: подсказки приходят, когда придут.
+ */
+export async function listAgyModels(k: Kernel): Promise<string[]> {
+  // С AI-прокси agy ходит в модели прокси (их список приходит из прокси), а `agy models` требует входа в Google.
+  if (k.opts.getSettings().proxy.baseUrl || !(await k.hasTool('agy'))) return [];
+  const bin = (await k.tools(['agy'])).agy;
+  const key = `${bin}\0agy`;
+  const hit = modelsCache.get(key);
+  if (hit && Date.now() - hit.at < 60_000) return hit.list;
+  for (const [x, v] of modelsCache) if (Date.now() - v.at >= 60_000) modelsCache.delete(x);
+  const env = prependPath(k.opts.env, path.dirname(bin));
+  const list = run(bin, ['models'], { cwd: os.homedir(), env, timeoutMs: 60_000 }).then((r) =>
+    r.code === 0
+      ? [
+          ...new Set(
+            stripAnsi(r.stdout)
+              .split('\n')
+              .map((l) => l.split('\t')[0].trim())
+              .filter((l) => /^[\w.-]+$/.test(l)),
+          ),
+        ]
+      : [],
+  );
   modelsCache.set(key, { at: Date.now(), list });
   list.catch(() => modelsCache.delete(key));
   return list;
