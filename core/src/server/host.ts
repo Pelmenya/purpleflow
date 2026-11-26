@@ -95,11 +95,12 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
     });
     if (opts.onEvent) core.on(opts.onEvent);
     await core.recover();
+    const runningCore = core;
 
     let closing: Promise<void> | undefined;
     return {
       async snapshot() {
-        const runs = await core.listRuns();
+        const runs = await runningCore.listRuns();
         return {
           projects: projects.map(({ id, name }) => ({ id, name })),
           runs: runs.flatMap((run) => {
@@ -110,16 +111,14 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
               return [];
             }
             const project = projectByPath.get(realPath);
-            return project
-              ? [{ id: run.id, projectId: project.id, title: run.title, status: run.status, next: run.next }]
-              : [];
+            return project ? [{ id: run.id, projectId: project.id, title: run.title, status: run.status, next: run.next }] : [];
           }),
         };
       },
       close() {
         closing ??= (async () => {
           try {
-            await core.shutdown();
+            await runningCore.shutdown();
           } finally {
             await closeServer(server);
           }
