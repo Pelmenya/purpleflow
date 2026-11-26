@@ -55,14 +55,15 @@ function stamp(number) {
   const dir = phaseDir(title);
   const result = evidence(dir, Number(number), title);
   // Предыдущая фаза должна быть в базе, прежде чем её зависимость попадает в очередь.
-  const subjects = execFileSync('git', ['log', 'origin/main', '--format=%s'], { cwd: root, encoding: 'utf8' });
+  // Полные сообщения: при слиянии merge-коммитом название PR фазы стоит в теле, а не в заголовке.
+  const subjects = execFileSync('git', ['log', 'origin/main', '--format=%B'], { cwd: root, encoding: 'utf8' });
   for (const { id } of result.cards) {
     const section = read(path.join(dir, `card-${id}.md`))
       .split(/^## Предпосылки\s*$/m)[1]
       ?.split(/^## /m)[0];
     requireValue(section?.trim(), `#${id}: пропущены предпосылки`);
     for (const [, phase] of section.matchAll(/Ф(\d+[a-z]*)/g))
-      requireValue(subjects.includes(`Ralph · Ф${phase}:`), `#${id}: нужна Ф${phase} в origin/main`);
+      requireValue(new RegExp(`^(?:feat: )?Ralph · Ф${phase}: `, 'm').test(subjects), `#${id}: нужна Ф${phase} в origin/main`);
   }
   const target = path.join(dir, 'stamp.json');
   const tmp = target + '.' + process.pid;
