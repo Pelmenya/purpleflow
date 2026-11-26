@@ -559,13 +559,17 @@ function processTools(root: string, pidFile?: string): ServerConfig['settings'][
 }
 
 async function waitForStatus(process: ServiceProcess, port: number, status: number): Promise<void> {
-  for (let attempt = 0; attempt < 400; attempt++) {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
     if (process.child.exitCode !== null || process.child.signalCode !== null) break;
     try {
-      const response = await fetch(`http://127.0.0.1:${port}/login`);
+      const response = await fetch(`http://127.0.0.1:${port}/login`, {
+        signal: AbortSignal.timeout(Math.min(1_000, deadline - Date.now())),
+      });
       await response.arrayBuffer();
       if (response.status === status) return;
     } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25));
   }
   assert.fail(`Не получен HTTP ${status}: ${process.stderr()}`);
 }
