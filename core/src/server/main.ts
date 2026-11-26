@@ -1,7 +1,8 @@
-import { readSecret } from './config.js';
+import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
+import { buildAgentEnv, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
+import { startHost as startServerHost } from './host.js';
 import type { Host, HostSnapshot } from './host.js';
-import type { IncomingMessage, RequestListener, ServerResponse } from 'node:http';
 import { checkOrigin, createSessions, isReturnRoute, readBody, rejectBody } from './session.js';
 import type { Sessions } from './session.js';
 
@@ -158,8 +159,77 @@ export function createServerApp(
 }
 
 export async function startService(
-  _config: ServerConfig,
-  _deps: { startHost?: typeof import('./host.js').startHost; now?: () => number } = {},
+  config: ServerConfig,
+  deps: { startHost?: typeof startServerHost; now?: () => number } = {},
 ): Promise<Service> {
-  throw new Error('Не реализовано');
+  const now = deps.now;
+  const sessions = createSessions({ secret: readSecret(config.secretFile), now });
+  const agentEnv = buildAgentEnv();
+  const starter = deps.startHost ?? startServerHost;
+  let handler: RequestListener = (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'self'");
+    send(res, 503, 'Служба запускается', 'text/plain; charset=utf-8', { 'Retry-After': '1' });
+  };
+  const server = http.createServer((req, res) => handler(req, res));
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off('listening', onListening);
+      reject(error);
+    };
+    const onListening = () => {
+      server.off('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(config.port, '127.0.0.1');
+  });
+
+  let stopping = false;
+  const launching = Promise.resolve().then(() =>
+    starter({
+      dataDir: config.dataDir,
+      promptsDir: config.promptsDir,
+      projects: config.projects,
+      settings: config.settings,
+      agentEnv,
+    }),
+  );
+  const ready = launching.then((host) => {
+    if (stopping) return new Promise<void>(() => {});
+    handler = createServerApp(config, host, { sessions, now });
+  });
+  let stopPromise: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopping = true;
+    const serverClosed = new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    stopPromise = (async () => {
+      let firstError: unknown;
+      try {
+        const host = await launching.catch(() => undefined);
+        if (host) {
+          try {
+            await host.close();
+          } catch (error) {
+            firstError = error;
+          }
+        }
+      } finally {
+        server.closeAllConnections();
+        try {
+          await serverClosed;
+        } catch (error) {
+          firstError ??= error;
+        }
+      }
+      if (firstError !== undefined) throw firstError;
+    })();
+    return stopPromise;
+  };
+  return { ready, stop };
 }

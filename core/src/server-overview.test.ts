@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -9,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { emptyUsage } from './agents/common.js';
 import type { ServerConfig } from './server/config.js';
 import { startHost, type Host, type HostSnapshot, type StartHostOptions } from './server/host.js';
-import { createServerApp } from './server/main.js';
+import { createServerApp, startService } from './server/main.js';
 import { RunStore } from './store.js';
 import type { RunFile } from './types.js';
 
@@ -299,4 +300,192 @@ test('вход: чужой Origin 403, неверный секрет 401, тел
   assert.ok(Number(limited.headers.get('retry-after')) > 0);
   assert.match(await limited.text(), /Слишком много попыток/);
   assert.equal(coreCalls, 0);
+});
+
+
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return address.port;
+}
+
+async function assertPortFree(port: number): Promise<void> {
+  const server = net.createServer();
+  server.listen(port, '127.0.0.1');
+  await once(server, 'listening');
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+}
+
+function stubHost(overrides: Partial<Host> = {}): Host {
+  return {
+    async snapshot() {
+      return { projects: [], runs: [] };
+    },
+    async close() {},
+    ...overrides,
+  };
+}
+
+async function withinFiveSeconds<T>(promise: Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => (timer = setTimeout(() => reject(new Error('Остановка заняла больше 5 секунд')), 5_000))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function partialPost(port: number): Promise<net.Socket> {
+  const socket = net.connect(port, '127.0.0.1');
+  socket.on('error', () => {});
+  await once(socket, 'connect');
+  await new Promise<void>((resolve) => {
+    socket.write('POST /login HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 16384\r\n\r\n1234567890', () => resolve());
+  });
+  return socket;
+}
+
+test('служба: небезопасный секрет — отказ без привязки порта и без вызова startHost', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const port = await freePort();
+  const config = configFor(root, project, port);
+  fs.chmodSync(config.secretFile, 0o644);
+  let hostCalls = 0;
+
+  await assert.rejects(
+    startService(config, {
+      startHost: async () => {
+        hostCalls++;
+        return stubHost();
+      },
+    }),
+    /доступен группе или остальным пользователям/,
+  );
+  assert.equal(hostCalls, 0);
+  await assertPortFree(port);
+});
+
+test('служба: хост получает agentEnv из buildAgentEnv', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const config = configFor(root, project, await freePort());
+  const marker = 'PF_SERVICE_TEST_MARKER';
+  const previous = process.env[marker];
+  process.env[marker] = 'секрет службы';
+  t.after(() => {
+    if (previous === undefined) delete process.env[marker];
+    else process.env[marker] = previous;
+  });
+  let agentEnv: NodeJS.ProcessEnv | undefined;
+  const service = await startService(config, {
+    startHost: async (options) => {
+      agentEnv = options.agentEnv;
+      return stubHost();
+    },
+  });
+  t.after(() => service.stop());
+  await service.ready;
+
+  assert.equal(agentEnv?.[marker], undefined);
+  assert.equal(agentEnv?.HOME, process.env.HOME);
+  await service.stop();
+});
+
+test('служба: stop во время запуска хоста', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const port = await freePort();
+  const config = configFor(root, project, port);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  let closeCalls = 0;
+  let readySettled = false;
+  const service = await startService(config, {
+    startHost: async () => {
+      await gate;
+      return stubHost({
+        async close() {
+          closeCalls++;
+        },
+      });
+    },
+  });
+  t.after(async () => {
+    release();
+    await service.stop();
+  });
+  void service.ready.then(
+    () => (readySettled = true),
+    () => (readySettled = true),
+  );
+
+  const waiting = await fetch(`http://127.0.0.1:${port}/api/overview`);
+  assert.equal(waiting.status, 503);
+  assert.doesNotMatch(await waiting.text(), /project/);
+  const firstStop = service.stop();
+  assert.strictEqual(firstStop, service.stop());
+  release();
+  await withinFiveSeconds(firstStop);
+
+  assert.equal(closeCalls, 1);
+  assert.equal(readySettled, false);
+  await assertPortFree(port);
+});
+
+test('служба: зависший POST не задерживает stop', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const port = await freePort();
+  const config = configFor(root, project, port);
+  const service = await startService(config, { startHost: async () => stubHost() });
+  t.after(() => service.stop());
+  await service.ready;
+  const socket = await partialPost(port);
+  t.after(() => socket.destroy());
+  const closed = new Promise<void>((resolve) => socket.once('close', resolve));
+
+  await withinFiveSeconds(service.stop());
+  await withinFiveSeconds(closed.then(() => undefined));
+  await assertPortFree(port);
+});
+
+test('служба: отказ host.close() всё равно закрывает соединения', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const port = await freePort();
+  const config = configFor(root, project, port);
+  const failure = new Error('Отказ закрытия хоста');
+  const service = await startService(config, {
+    startHost: async () =>
+      stubHost({
+        close: () => Promise.reject(failure),
+      }),
+  });
+  t.after(() => service.stop().catch(() => {}));
+  await service.ready;
+  const socket = await partialPost(port);
+  t.after(() => socket.destroy());
+  const closed = new Promise<void>((resolve) => socket.once('close', resolve));
+
+  await withinFiveSeconds(
+    assert.rejects(service.stop(), (error) => {
+      assert.equal(error, failure);
+      return true;
+    }),
+  );
+  await withinFiveSeconds(closed.then(() => undefined));
+  await assertPortFree(port);
 });
