@@ -809,7 +809,7 @@ test('остановка: фоновый learn старого ядра ниче�
     });
     return { ok: result.code === 0, text: '{"lessons":["Новый урок"]}', usage: emptyUsage() };
   });
-  const run = save(a, {
+  save(a, {
     next: 'finish',
     gates: [{ gate: 'gate2', at: '2026-01-01T00:00:00.000Z', decision: 'reject', comment: 'Надо иначе' }],
   });
