@@ -251,9 +251,11 @@ test('обзор: неизвестный путь 404, неподдержива�
   const jar = new CookieJar();
   await jar.login(origin);
 
-  const missing = await jar.request(origin, '/missing');
-  assert.equal(missing.status, 404);
-  assert.equal(missing.headers.get('allow'), null);
+  for (const route of ['/missing', '/constructor']) {
+    const missing = await jar.request(origin, route);
+    assert.equal(missing.status, 404, route);
+    assert.equal(missing.headers.get('allow'), null, route);
+  }
   const wrongMethods = [
     { route: '/', allow: 'GET' },
     { route: '/api/overview', allow: 'GET' },

@@ -74,15 +74,15 @@ function sessionToken(req: IncomingMessage): string {
 
 const runRoute = /^\/runs\/([^/]+)$/;
 const readMethods = ['GET'] as const;
-const routeMethods: Readonly<Record<string, readonly string[]>> = {
-  '/': readMethods,
-  '/api/overview': readMethods,
-  '/login': ['GET', 'POST'],
-  '/logout': ['POST'],
-};
+const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
+  ['/', readMethods],
+  ['/api/overview', readMethods],
+  ['/login', ['GET', 'POST']],
+  ['/logout', ['POST']],
+]);
 
 function allowedMethods(route: string): readonly string[] | undefined {
-  return runRoute.test(route) ? readMethods : routeMethods[route];
+  return runRoute.test(route) ? readMethods : routeMethods.get(route);
 }
 
 export function createServerApp(config: ServerConfig, host: Host, opts: { now?: () => number; sessions?: Sessions } = {}): RequestListener {
