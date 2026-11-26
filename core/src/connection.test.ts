@@ -8,7 +8,8 @@ import { removeLater } from './services/connection.js';
 // Удаление, которому мешают права: на Windows так выглядит папка, которую ещё держит процесс агента (EPERM).
 test(
   'папка проверки подключения: не удалилась — проверка не падает; удаляется, когда можно',
-  { skip: process.platform === 'win32' },
+  // Под root права 0555 не мешают удалению, и «не удалилась» не воспроизвести.
+  { skip: process.platform === 'win32' || process.getuid?.() === 0 },
   () => {
     const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-conn-'));
     const dir = path.join(parent, 'purpleflow-check-x');

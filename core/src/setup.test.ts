@@ -32,7 +32,14 @@ esac
 `,
     { mode: 0o755 },
   );
-  const env: NodeJS.ProcessEnv = { PATH: `${bin}:/usr/bin:/bin` };
+  // Системные утилиты фейкового npm — ссылками в своём каталоге: openspec, поставленный в /usr/bin, тест не видит.
+  const sys = path.join(root, 'sys');
+  fs.mkdirSync(sys);
+  for (const name of ['sh', 'mkdir', 'chmod', 'dirname', 'cat']) {
+    const real = ['/usr/bin', '/bin'].map((d) => path.join(d, name)).find((f) => fs.existsSync(f));
+    if (real) fs.symlinkSync(real, path.join(sys, name));
+  }
+  const env: NodeJS.ProcessEnv = { PATH: `${bin}:${sys}` };
   return { env, bin, root, calls: () => fs.readFileSync(log, 'utf8').trim().split('\n') };
 }
 
