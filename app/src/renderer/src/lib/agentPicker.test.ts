@@ -9,6 +9,7 @@ const OPTS = {
   ],
   codex: [{ value: 'gpt-6-sol', label: 'gpt-6-sol' }],
   opencode: [{ value: 'openrouter/qwen', label: 'openrouter/qwen' }],
+  agy: [{ value: 'gemini-3.8-flash-high', label: 'gemini-3.8-flash-high' }],
 };
 
 test('pickerSections: разделы по включённым агентам, «по умолчанию» первым', () => {

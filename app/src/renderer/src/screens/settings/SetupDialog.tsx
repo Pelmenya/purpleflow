@@ -8,6 +8,7 @@ import { shownTools, toolNeeded } from '../../lib/tools';
 import { AgentToggles, CheckButton, ChecksList, TOOL_INFO } from './parts';
 import type { SettingsDraft } from './useSettingsDraft';
 import type { ToolSetup } from './useToolSetup';
+import { useDialogClose } from '../../lib/useDialogClose';
 
 function NodeRow({ setup }: { setup: ToolSetup }) {
   const { node, current, errors, needsNode } = setup;
@@ -39,7 +40,7 @@ function NodeRow({ setup }: { setup: ToolSetup }) {
 export function SetupDialog({
   draft,
   setup,
-  onClose,
+  onClose: closeNow,
   onFinish,
 }: {
   draft: SettingsDraft;
@@ -48,6 +49,7 @@ export function SetupDialog({
   onFinish: () => void;
 }) {
   const { state } = useStore();
+  const { closing, close: onClose } = useDialogClose(closeNow);
   const tools = state.tools;
   const { checks } = draft;
   const busy = setup.running || draft.checking || draft.savingEnabled;
@@ -60,7 +62,7 @@ export function SetupDialog({
   });
 
   return createPortal(
-    <div className="qs-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
+    <div className={`qs-scrim ${closing ? 'is-closing' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="qs setup" role="dialog" aria-modal aria-labelledby="setup-title">
         <header className="qs-head">
           <div>
@@ -108,6 +110,7 @@ export function SetupDialog({
                   ) : (
                     <>
                       Не найден. Поставим: <code>{TOOL_INFO[t].install}</code>
+                      {TOOL_INFO[t].note ? <> {TOOL_INFO[t].note}</> : null}
                     </>
                   )}
                 </span>

@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { emptyUsage, type AgentRunOptions } from './agents/common.js';
 import { Kernel } from './kernel.js';
+import { selfCheckReason, startSelfCheck } from './stages/selfcheck.js';
 import { stageVisual } from './stages/visual.js';
 import type { CoreSettings, RunFile } from './types.js';
 
@@ -155,4 +156,44 @@ test('сбои: приложение не поднялось, ответ не JS
   assert.equal(down.prompts.length, 0, 'агента не запускали');
   const bad = setup(t, () => 'просто текст');
   await assert.rejects(stageVisual(bad.k, bad.run), /не в формате JSON/);
+});
+
+test('самопроверка исполнителя: только с визуальной проверкой; codex — через браузер снаружи, кроме Windows', () => {
+  const base = {
+    visual: true,
+    runCommand: 'npm run dev',
+    appUrl: 'http://localhost:{port}',
+    agents: { executor: 'claude' },
+  } as unknown as RunFile;
+  assert.equal(selfCheckReason(base), 'on');
+  assert.equal(selfCheckReason({ ...base, visual: false }), 'off');
+  assert.equal(selfCheckReason({ ...base, appUrl: '' }), 'off');
+  const codex = { ...base, agents: { executor: 'codex' } } as never;
+  assert.equal(selfCheckReason(codex, 'darwin'), 'codex');
+  assert.equal(selfCheckReason(codex, 'linux'), 'codex');
+  assert.equal(selfCheckReason(codex, 'win32'), 'codex-win');
+});
+
+test('самопроверка исполнителя: приложение в фоне, pw в PATH, адрес в промпте; stop гасит сервер', unix, async (t) => {
+  const { k, run } = setup(t, () => '');
+  const self = (await startSelfCheck(k, run, 1))!;
+  assert.ok(self);
+  const url = /на (http:\/\/127\.0\.0\.1:\d+\/)/.exec(self.block)![1];
+  assert.match(self.block, /Самопроверка в браузере/);
+  const dir = self.env.PATH!.split(path.delimiter)[0];
+  assert.ok(fs.existsSync(path.join(dir, 'pw')), 'обёртка pw — первой в PATH');
+  assert.ok(dir.includes(path.join('visual', run.id, 'self-1')));
+  let up = false;
+  for (let i = 0; i < 100 && !up; i++) {
+    up = await fetch(url).then(
+      (r) => r.ok,
+      () => false,
+    );
+    if (!up) await new Promise((r) => setTimeout(r, 100));
+  }
+  assert.ok(up, 'приложение поднялось');
+  await self.stop();
+  await assert.rejects(fetch(url), 'сервер погашен');
+
+  assert.match(self.block, /pw open http/, 'не codex — браузер открывает сам');
 });

@@ -223,6 +223,8 @@ export const CORE_METHODS: Record<CoreMethod, true> = {
   deleteChat: true,
   sendChat: true,
   allowChatMcp: true,
+  grantChatFullAccess: true,
+  answerChatPermission: true,
   stopChat: true,
   unqueueChat: true,
   chatToTask: true,
@@ -235,10 +237,25 @@ export const CORE_METHODS: Record<CoreMethod, true> = {
   listChatSkills: true,
   chatDefaultModel: true,
   listOpencodeModels: true,
+  listAgyModels: true,
   compactChat: true,
 };
 
 export const coreMethodNames = Object.keys(CORE_METHODS) as CoreMethod[];
+
+/** Модель диктовки (whisper.cpp). */
+export interface DictationModel {
+  id: string;
+  label: string;
+  hint: string;
+  /** Байт. */
+  size: number;
+}
+export interface DictationStatus {
+  /** whisper-cli есть в этой сборке. */
+  engine: boolean;
+  models: (DictationModel & { ready: boolean })[];
+}
 
 export interface PurpleFlowBridge {
   /** В этой сборке окно подключает отчёты об ошибках; отправку всё равно решает main. */
@@ -257,6 +274,21 @@ export interface PurpleFlowBridge {
   proxyModels(): Promise<ProxyModels | null>;
   /** Выбор папки; title — заголовок диалога. */
   pickFolder(title?: string): Promise<string | null>;
+  /** Диктовка: локальное распознавание речи (whisper.cpp). */
+  dictation: {
+    status(): Promise<DictationStatus>;
+    download(id: string): Promise<DictationStatus>;
+    cancel(id: string): Promise<void>;
+    remove(id: string): Promise<DictationStatus>;
+    /** Доступ к микрофону (macOS спрашивает один раз). */
+    mic(): Promise<boolean>;
+    /** WAV 16 кГц моно → текст. lang: ru, en или auto. */
+    transcribe(wav: Uint8Array, model: string, lang: string): Promise<string>;
+    /** Прогресс скачивания модели: 0…1. */
+    onProgress(fn: (id: string, share: number) => void): () => void;
+  };
+  /** Путь на диске у перетащенного файла или папки; пусто — не с диска (например, из буфера). */
+  pathForFile(file: File): string;
   pickFile(): Promise<string | null>;
   openPath(p: string): Promise<void>;
   /** Вкладка «Браузер»: эмуляция телефона для webview по его webContentsId. */

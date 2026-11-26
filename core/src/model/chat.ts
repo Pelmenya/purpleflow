@@ -39,6 +39,8 @@ export interface ChatToolPart {
   output?: string;
   /** codex отказал в вызове MCP без подтверждения — человек может разрешить его и попросить повторить. */
   approval?: { server: string; tool: string };
+  /** Команду не пустила песочница («Operation not permitted»): в режиме правок человек может дать полный доступ. */
+  sandboxDenied?: boolean;
   /** Шаги субагента, запущенного этим вызовом. */
   sub?: ChatSubStep[];
 }
@@ -53,7 +55,24 @@ export type ChatPart =
   | ChatToolPart
   | { kind: 'todos'; items: ChatTodo[] }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; key?: string }
-  | { kind: 'question'; id?: string; questions: ChatQuestion[] };
+  | { kind: 'question'; id?: string; questions: ChatQuestion[] }
+  | ChatPermissionPart;
+
+/** Ответ человека на запрос разрешения; expired — ход кончился раньше ответа. */
+export type PermissionState = 'pending' | 'once' | 'always' | 'denied' | 'expired';
+
+/** Агент просит действие, которое режим «Правки» не пускает (agy спрашивает перед каждым действием): решает человек. */
+export interface ChatPermissionPart {
+  kind: 'permission';
+  id: string;
+  /** Действие одной строкой: «Bash git commit -m …». */
+  text: string;
+  /** Команда или путь целиком. */
+  detail?: string;
+  /** Почему режим его не пускает. */
+  reason: string;
+  state: PermissionState;
+}
 
 export interface ChatMcpServer {
   name: string;
@@ -90,6 +109,8 @@ export interface ChatMessage {
   stopped?: boolean;
   /** Файлы проекта, изменённые за этот ход (только для чата с правками в git-репозитории). */
   changedFiles?: string[];
+  /** Ход в режиме правок упёрся в его ограничения: под ответом — «Дать полный доступ и повторить». */
+  needsFullAccess?: boolean;
   usage?: TokenUsage;
   /** Модель, которая ответила (из события запуска CLI). */
   model?: string;
@@ -130,12 +151,21 @@ export interface ChatFile {
   effort?: string;
   /** Разрешить агенту менять файлы проекта; выключено — только чтение. */
   edits: boolean;
+  /**
+   * Полный доступ (только вместе с правками): без песочницы — git, процессы, файлы вне проекта.
+   * Без него правки ограничены папкой проекта: codex workspace-write, claude — песочница bash, opencode — запрет коммитов и kill.
+   */
+  fullAccess?: boolean;
   /** Сессия CLI, которую продолжает следующий ход: claude --resume или codex exec resume. */
   session?: { agent: AgentKind; id: string };
   /** MCP-инструменты, разрешённые codex в этом чате без подтверждения. */
   mcpAllow?: { server: string; tool: string }[];
   /** Разрешённые только на следующий ход codex. */
   mcpOnce?: { server: string; tool: string }[];
+  /** Папки, добавленные в контекст чата: агент получает к ним доступ на чтение (claude и agy — --add-dir). */
+  dirs?: string[];
+  /** Действия agy, которые человек разрешил «в этом чате»: точная команда или путь (agyPermissionKey). */
+  agyAllow?: string[];
   createdAt: string;
   updatedAt: string;
   messages: ChatMessage[];

@@ -8,6 +8,7 @@ import { PROXY_ONLY_TITLE, proxyOnly } from '../lib/models';
 import { useStore } from '../lib/store';
 import { ComboInput } from './Dropdown';
 import { Button } from './ui';
+import { useDialogClose } from '../lib/useDialogClose';
 
 export function ModelInput(props: ComponentProps<typeof ComboInput>) {
   const { state } = useStore();
@@ -39,7 +40,8 @@ export function ModelInput(props: ComponentProps<typeof ComboInput>) {
 }
 
 /** Модель доступна только по подписке PurpleSchool: включить её (ключ уже есть) или войти и получить ключ. */
-export function SubscriptionGate({ model, onClose, onEnabled }: { model: string; onClose: () => void; onEnabled: () => void }) {
+export function SubscriptionGate({ model, onClose: closeNow, onEnabled }: { model: string; onClose: () => void; onEnabled: () => void }) {
+  const { closing, close: onClose } = useDialogClose(closeNow);
   const { state, saveSettings, go } = useStore();
   const s = state.settings;
   const [busy, setBusy] = useState(false);
@@ -81,7 +83,7 @@ export function SubscriptionGate({ model, onClose, onEnabled }: { model: string;
       : 'Нужен ключ AI-прокси PurpleSchool, а в этой сборке вход в аккаунт выключен.';
 
   return createPortal(
-    <div className="qs-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={`qs-scrim ${closing ? 'is-closing' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="qs sub-gate" role="dialog" aria-modal aria-labelledby="sub-gate-title">
         <header className="qs-head">
           <div>

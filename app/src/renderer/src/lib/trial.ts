@@ -52,13 +52,16 @@ export function useTrialLock(): TrialModel[] | null {
   return key ? models : null;
 }
 
-/** Пробная модель агента: claude — Anthropic, codex и opencode — OpenAI. */
+/**
+ * Пробная модель агента: claude — Anthropic, codex и opencode — OpenAI.
+ * У agy пробной модели нет: пробный баланс даёт модели Anthropic и OpenAI, а agy работает с Gemini.
+ */
 export const trialModelOf = (agent: AgentKind, models: TrialModel[]) =>
-  models.find((m) => m.provider === (agent === 'claude' ? 'ANTHROPIC' : 'OPENAI'));
+  agent === 'agy' ? undefined : models.find((m) => m.provider === (agent === 'claude' ? 'ANTHROPIC' : 'OPENAI'));
 
 /** Варианты выбора модели в пробном режиме: у каждого агента — только его пробная модель. */
 export function trialOptions(agents: AgentKind[], models: TrialModel[]): Record<AgentKind, DropOption<string>[]> {
-  const out = { claude: [], codex: [], opencode: [] } as Record<AgentKind, DropOption<string>[]>;
+  const out = { claude: [], codex: [], opencode: [], agy: [] } as Record<AgentKind, DropOption<string>[]>;
   for (const a of agents) {
     const m = trialModelOf(a, models);
     if (m) out[a] = [{ value: m.modelName, label: m.modelName, hint: `${m.displayName} — пробный баланс` }];

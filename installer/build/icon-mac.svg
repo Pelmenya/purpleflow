@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Значок установщика из дизайна (PurpleSchool.pen, узел sDky0 «IconBox»): загрузка в лоток. macOS: фон на всё поле без прозрачных краёв — система сама скругляет значок (с macOS 26 значок с прозрачной рамкой она сажает в светлую подложку). Windows и Linux берут icon.svg/png со скруглённым фоном. -->
+  <rect width="1024" height="1024" fill="#16171d"/><g transform="scale(23.272727)"><path transform="translate(10 10)" d="M2 13.5h4.5v4.5h11v-4.5h4.5v9h-20z" fill="#6c38cc"/><path transform="translate(10 10)" d="M9.75 1.5h4.5v7.5h4.25l-6.5 7.25-6.5-7.25h4.25z" fill="#d77ce6"/></g>
+</svg>

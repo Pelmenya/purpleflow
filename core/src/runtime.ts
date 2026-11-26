@@ -3,6 +3,7 @@
 import type { runClaude } from './agents/claude.js';
 import type { runCodex } from './agents/codex.js';
 import type { runOpencode } from './agents/opencode.js';
+import type { runAgy } from './agents/agy.js';
 import type { CheckResult, CoreEvent, CoreSettings } from './types.js';
 
 export interface CoreOptions {
@@ -12,7 +13,7 @@ export interface CoreOptions {
   env: NodeJS.ProcessEnv;
   getSettings: () => CoreSettings;
   /** Подмена агентов — для тестов конвейера без настоящих claude и codex. */
-  runners?: { claude?: typeof runClaude; codex?: typeof runCodex; opencode?: typeof runOpencode };
+  runners?: { claude?: typeof runClaude; codex?: typeof runCodex; opencode?: typeof runOpencode; agy?: typeof runAgy };
 }
 
 export type Listener = (e: CoreEvent) => void;
@@ -22,6 +23,7 @@ export interface Tools {
   claude: string;
   codex: string;
   opencode: string;
+  agy: string;
   openspec: string;
 }
 

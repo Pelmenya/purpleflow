@@ -104,12 +104,27 @@ export interface CoreApi {
   /** Чаты: разговор с агентом вне конвейера. Ответ приходит событиями chat.updated. */
   listChats(): Promise<ChatSummary[]>;
   getChat(id: string): Promise<{ chat: ChatFile; busy: boolean } | null>;
-  createChat(o: { projectPath?: string; agent?: AgentKind; model?: string; effort?: string; edits?: boolean }): Promise<ChatFile>;
-  updateChat(id: string, patch: Partial<Pick<ChatFile, 'title' | 'agent' | 'model' | 'effort' | 'edits'>>): Promise<ChatFile>;
+  createChat(o: {
+    projectPath?: string;
+    agent?: AgentKind;
+    model?: string;
+    effort?: string;
+    edits?: boolean;
+    fullAccess?: boolean;
+    dirs?: string[];
+  }): Promise<ChatFile>;
+  updateChat(
+    id: string,
+    patch: Partial<Pick<ChatFile, 'title' | 'agent' | 'model' | 'effort' | 'edits' | 'fullAccess' | 'dirs'>>,
+  ): Promise<ChatFile>;
   deleteChat(id: string): Promise<void>;
   sendChat(id: string, text: string, files?: { name: string; data: Uint8Array }[]): Promise<void>;
   /** Разрешить codex отклонённый инструмент MCP и попросить повторить вызов. */
   allowChatMcp(id: string, tool: { server: string; tool: string; always?: boolean }): Promise<void>;
+  /** Песочница правок не пустила команду: полный доступ этому чату и просьба повторить. */
+  grantChatFullAccess(id: string): Promise<void>;
+  /** Ответ на запрос разрешения agy в «Правках»: once — один раз, always — до конца чата, deny — отказ. */
+  answerChatPermission(id: string, requestId: string, answer: 'once' | 'always' | 'deny'): Promise<void>;
   stopChat(id: string): Promise<void>;
   /** Убрать сообщение из очереди, пока агент его не получил. */
   unqueueChat(id: string, messageId: string): Promise<ChatFile>;
@@ -133,5 +148,7 @@ export interface CoreApi {
   /** Модели opencode «провайдер/модель» из его настроенных провайдеров; opencode выключен или не найден — пусто. */
   /** dir — папка проекта: подмешиваются провайдеры из его opencode.json. */
   listOpencodeModels(dir?: string): Promise<string[]>;
+  /** Модели agy (слаги `agy models`, зависят от тарифа Google-аккаунта); agy выключен или не найден — пусто. */
+  listAgyModels(): Promise<string[]>;
   getChatChangedFiles(id: string): Promise<string[]>;
 }

@@ -10,16 +10,18 @@ import type { CoreSettings } from './types.js';
 import { claudeArgs } from './agents/claude.js';
 import { codexArgs } from './agents/codex.js';
 import { emptyUsage, type AgentRunOptions } from './agents/common.js';
+import type { AgyOptions } from './agents/agy.js';
 import type { ChatFile, CoreEvent } from './types.js';
 
 const PROMPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'prompts');
 
 /** Ядро с «установленными» claude и codex (скрипты отвечают версией) и подменёнными запусками. */
-function makeCore(runners: { claude?: unknown; codex?: unknown }) {
+function makeCore(runners: { claude?: unknown; codex?: unknown; agy?: unknown }) {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-bin-'));
-  for (const n of ['codex', 'claude']) fs.writeFileSync(path.join(bin, n), `#!/bin/sh\necho "${n} 1.0.0"\n`, { mode: 0o755 });
+  for (const n of ['codex', 'claude', 'agy']) fs.writeFileSync(path.join(bin, n), `#!/bin/sh\necho "${n} 1.0.0"\n`, { mode: 0o755 });
   const settings = {
-    toolPaths: { codex: path.join(bin, 'codex'), claude: path.join(bin, 'claude') },
+    toolPaths: { codex: path.join(bin, 'codex'), claude: path.join(bin, 'claude'), agy: path.join(bin, 'agy') },
+    enabledAgents: ['claude', 'codex', 'agy'],
     proxy: { baseUrl: '', apiKey: '' },
     models: { planner: 'opus', executor: 'sonnet', reviewer: '' },
     agents: { planner: 'claude', executor: 'claude', reviewer: 'codex' },
@@ -189,6 +191,19 @@ test('аргументы CLI для чата: частичные сообщен�
   assert.ok(ephemeral.includes('--ephemeral'));
 });
 
+test('claude в правках чата: песочница bash с закрытым .git — одним --settings вместе с настройками пользователя', () => {
+  const settingsOf = (a: string[]) => a.filter((_, i) => a[i - 1] === '--settings').map((x) => JSON.parse(x));
+  assert.deepEqual(settingsOf(claudeArgs({})), []);
+  const [own] = settingsOf(claudeArgs({ sandbox: '/p' }));
+  assert.equal(own.sandbox.enabled, true);
+  assert.equal(own.sandbox.allowUnsandboxedCommands, false);
+  assert.deepEqual(own.sandbox.filesystem.denyWrite, [path.join('/p', '.git')]);
+  const both = settingsOf(claudeArgs({ sandbox: '/p', userConfig: true }));
+  assert.equal(both.length, 1);
+  assert.equal(both[0].disableAllHooks, true);
+  assert.equal(both[0].sandbox.enabled, true);
+});
+
 test('чат: сообщение во время ответа встаёт в очередь и уходит следующим ходом; прерванный ответ, удаление из очереди', async () => {
   const calls: AgentRunOptions[] = [];
   const gates: ((r: { stopped?: boolean }) => void)[] = [];
@@ -280,6 +295,113 @@ test('чат: смена правок и упавшее продолжение �
   await untilIdle(core, chat.id);
   assert.equal(calls[4].resume, undefined);
   assert.match(calls[4].prompt, /Предыдущая переписка/);
+});
+
+test('чат: три режима — песочница codex и claude, полный доступ без неё; смена режима начинает новую сессию', async () => {
+  const claudeCalls: AgentRunOptions[] = [];
+  const codexCalls: (AgentRunOptions & { sandbox: string; resumeThread?: string })[] = [];
+  const claude = async (o: AgentRunOptions) => {
+    claudeCalls.push(o);
+    return { ok: true, text: 'Да', usage: emptyUsage() };
+  };
+  const codex = async (o: AgentRunOptions & { sandbox: string }) => {
+    codexCalls.push(o);
+    o.onSession?.('thread-1');
+    return { ok: true, text: 'Да', usage: emptyUsage() };
+  };
+  const core = makeCore({ claude, codex });
+  const chat = await core.createChat({ agent: 'codex' });
+  assert.equal(chat.fullAccess, undefined);
+  const turn = async (t: string) => {
+    await core.sendChat(chat.id, t);
+    await untilIdle(core, chat.id);
+  };
+
+  await turn('Правки');
+  assert.equal(codexCalls[0].sandbox, 'workspace-write');
+  assert.match(codexCalls[0].systemPrompt ?? '', /Полный доступ/);
+
+  // Полный доступ: без песочницы, свои правила — значит, новая сессия.
+  await core.updateChat(chat.id, { fullAccess: true });
+  await turn('Закоммить');
+  assert.equal(codexCalls[1].sandbox, 'danger-full-access');
+  assert.equal(codexCalls[1].resumeThread, undefined);
+  assert.match(codexCalls[1].systemPrompt ?? '', /полного доступа/);
+
+  // Вопросы снимают и полный доступ.
+  const ro = await core.updateChat(chat.id, { edits: false });
+  assert.equal(ro.fullAccess, undefined);
+  await turn('Вопрос');
+  assert.equal(codexCalls[2].sandbox, 'read-only');
+
+  // claude: в правках bash в песочнице папки чата, в полном доступе — без неё.
+  await core.updateChat(chat.id, { agent: 'claude', edits: true });
+  await turn('Правка');
+  assert.ok(claudeCalls[0].sandbox);
+  await core.updateChat(chat.id, { fullAccess: true });
+  await turn('Ещё');
+  assert.equal(claudeCalls[1].sandbox, undefined);
+  assert.equal(claudeCalls[1].resume, undefined);
+});
+
+test('чат: отказ песочницы помечается в вызове; полный доступ по запросу — новая сессия и просьба повторить', async () => {
+  const calls: (AgentRunOptions & { sandbox: string; resumeThread?: string })[] = [];
+  const codex = async (o: AgentRunOptions & { sandbox: string }) => {
+    calls.push(o);
+    o.onSession?.('thread-1');
+    o.onStep?.({ kind: 'tool', id: 'c1', text: 'shell git commit' });
+    o.onStep?.({ kind: 'tool_result', id: 'c1', ok: false, output: "fatal: Unable to create '.git/index.lock': Operation not permitted" });
+    // opencode: команду запретило правило permission.bash.
+    o.onStep?.({ kind: 'tool', id: 'c3', text: 'bash kill 42' });
+    o.onStep?.({
+      kind: 'tool_result',
+      id: 'c3',
+      ok: false,
+      output:
+        'The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules […]',
+    });
+    o.onStep?.({ kind: 'tool', id: 'c2', text: 'shell ls' });
+    o.onStep?.({ kind: 'tool_result', id: 'c2', ok: true, output: 'a.txt' });
+    return { ok: true, text: 'Не получилось', usage: emptyUsage() };
+  };
+  const core = makeCore({ codex });
+  const chat = await core.createChat({ agent: 'codex' });
+  await core.sendChat(chat.id, 'Закоммить');
+  const first = await untilIdle(core, chat.id);
+  const tools = first.messages.at(-1)!.parts!.filter((p) => p.kind === 'tool');
+  assert.deepEqual(
+    tools.map((t) => t.sandboxDenied),
+    [true, true, undefined],
+  );
+
+  await core.grantChatFullAccess(chat.id);
+  const after = await untilIdle(core, chat.id);
+  assert.equal(after.fullAccess, true);
+  assert.equal(calls[1].sandbox, 'danger-full-access');
+  assert.equal(calls[1].resumeThread, undefined);
+  assert.match(calls[1].prompt, /Включил полный доступ/);
+});
+
+test('чат: codex не прислал вызов, но просит полный доступ текстом — ответ помечен только в режиме правок', async () => {
+  // Так ведёт себя codex 0.172: команду, которую не пустила песочница, событием не присылает — только текст ответа.
+  const codex = async (o: AgentRunOptions) => {
+    o.onStep?.({
+      kind: 'text',
+      text: 'Не удалось создать коммит: песочница запретила запись в .git/index.lock. Для этого нужен режим «Полный доступ».',
+    });
+    return { ok: true, text: '', usage: emptyUsage() };
+  };
+  const core = makeCore({ codex });
+  const chat = await core.createChat({ agent: 'codex' });
+  const last = async () => {
+    await core.sendChat(chat.id, 'Сделай коммит');
+    return (await untilIdle(core, chat.id)).messages.at(-1)!;
+  };
+  assert.equal((await last()).needsFullAccess, true);
+  await core.updateChat(chat.id, { fullAccess: true });
+  assert.equal((await last()).needsFullAccess, undefined);
+  await core.updateChat(chat.id, { edits: false });
+  assert.equal((await last()).needsFullAccess, undefined);
 });
 
 test('чат: два вложения с одним именем не затирают друг друга', async () => {
@@ -574,4 +696,109 @@ test('Git (просмотр): ветки с отставанием от main, и
   } finally {
     fs.rmSync(repo, { recursive: true, force: true });
   }
+});
+
+test('чат на agy в «Правках»: запрос разрешения ждёт человека, «в этом чате» запоминается на следующие ходы', async () => {
+  const calls: AgyOptions[] = [];
+  const answers: string[] = [];
+  const agy = async (o: AgyOptions) => {
+    calls.push(o);
+    if (calls.length === 1) {
+      const a = await o.askPermission!({
+        id: 'p1',
+        text: 'Bash git push',
+        detail: 'git push',
+        reason: 'git-операции доступны только с полным доступом',
+      });
+      answers.push(a);
+      if (a === 'always') o.onAllow?.('command:git push');
+    }
+    o.onStep?.({ kind: 'text', text: 'Готово' });
+    return { ok: true, text: 'Готово', usage: emptyUsage() };
+  };
+  const core = makeCore({ agy });
+  const chat = await core.createChat({ agent: 'agy' });
+  await core.updateChat(chat.id, { edits: true });
+  await core.sendChat(chat.id, 'Отправь ветку');
+  // Карточка появляется, пока ход идёт.
+  let part;
+  for (let i = 0; i < 200 && !part; i++) {
+    part = (await core.getChat(chat.id))!.chat.messages.at(-1)!.parts?.find((p) => p.kind === 'permission');
+    if (!part) await new Promise((r) => setTimeout(r, 10));
+  }
+  assert.deepEqual(part, {
+    kind: 'permission',
+    id: 'p1',
+    text: 'Bash git push',
+    detail: 'git push',
+    reason: 'git-операции доступны только с полным доступом',
+    state: 'pending',
+  });
+  await core.answerChatPermission(chat.id, 'p1', 'always');
+  const done = await untilIdle(core, chat.id);
+  assert.deepEqual(answers, ['always']);
+  assert.equal((done.messages.at(-1)!.parts!.find((p) => p.kind === 'permission') as { state: string }).state, 'always');
+  assert.deepEqual(done.agyAllow, ['command:git push']);
+  await assert.rejects(core.answerChatPermission(chat.id, 'p1', 'once'), /не ждёт ответа/);
+
+  await core.sendChat(chat.id, 'Ещё раз');
+  await untilIdle(core, chat.id);
+  assert.deepEqual(calls[1].allowed, ['command:git push']);
+  assert.equal(calls[1].limited, true);
+});
+
+test('чат на agy: в «Вопросах» и с полным доступом человека не спрашивают; карточка без ответа гаснет с ходом', async () => {
+  const calls: AgyOptions[] = [];
+  const agy = async (o: AgyOptions) => {
+    calls.push(o);
+    // Ход кончился, не дождавшись ответа (стоп или сбой agy).
+    if (o.askPermission)
+      void o.askPermission({ id: 'p1', text: 'Bash rm -rf /tmp/x', reason: 'запись вне папки проекта доступна только с полным доступом' });
+    return { ok: true, text: 'Ок', usage: emptyUsage() };
+  };
+  const core = makeCore({ agy });
+  const chat = await core.createChat({ agent: 'agy', edits: false });
+  await core.sendChat(chat.id, 'Вопрос');
+  await untilIdle(core, chat.id);
+  assert.equal(calls[0].askPermission, undefined);
+  assert.equal(calls[0].readOnly, true);
+  await core.updateChat(chat.id, { edits: true });
+  await core.sendChat(chat.id, 'Правка');
+  const after = await untilIdle(core, chat.id);
+  assert.equal((after.messages.at(-1)!.parts!.find((p) => p.kind === 'permission') as { state: string }).state, 'expired');
+  await core.updateChat(chat.id, { fullAccess: true });
+  await core.sendChat(chat.id, 'Полный');
+  await untilIdle(core, chat.id);
+  assert.equal(calls.at(-1)!.askPermission, undefined);
+});
+
+test('чат: папки в контексте — агенту доступ (--add-dir) и пути в промпте; папка проекта и повторы отбрасываются', async () => {
+  const calls: AgentRunOptions[] = [];
+  const core = makeCore({
+    claude: async (o: AgentRunOptions) => {
+      calls.push(o);
+      return { ok: true, text: 'Ок', usage: emptyUsage() };
+    },
+  });
+  const project = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pf-proj-')));
+  const docs = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pf-docs-')));
+  const chat = await core.createChat({ agent: 'claude', projectPath: project, dirs: [docs, docs, project] });
+  assert.deepEqual(chat.dirs, [docs]);
+  await core.sendChat(chat.id, 'Сравни с документацией');
+  await untilIdle(core, chat.id);
+  assert.deepEqual(calls[0].addDirs, [docs]);
+  assert.match(calls[0].prompt, new RegExp(`Папки, добавленные в контекст чата[\\s\\S]*- ${docs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(claudeArgs(calls[0] as never).join(' '), new RegExp(`--add-dir ${docs.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+
+  // Ошибочный путь — понятная ошибка, а не тихо пропущенная папка.
+  const file = path.join(docs, 'a.txt');
+  fs.writeFileSync(file, 'x');
+  await assert.rejects(core.updateChat(chat.id, { dirs: [docs, file] }), /Это не папка/);
+  await assert.rejects(core.updateChat(chat.id, { dirs: ['relative/dir'] }), /полный путь/);
+  // Убрали все — поля нет, следующему ходу папок не передаём.
+  assert.equal((await core.updateChat(chat.id, { dirs: [] })).dirs, undefined);
+  await core.sendChat(chat.id, 'Ещё');
+  await untilIdle(core, chat.id);
+  assert.deepEqual(calls[1].addDirs, []);
+  assert.doesNotMatch(calls[1].prompt, /Папки, добавленные в контекст/);
 });

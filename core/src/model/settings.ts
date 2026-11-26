@@ -1,6 +1,6 @@
 // Настройки ядра, инструменты и роли агентов.
 
-export type ToolName = 'git' | 'claude' | 'codex' | 'opencode' | 'openspec';
+export type ToolName = 'git' | 'claude' | 'codex' | 'opencode' | 'agy' | 'openspec';
 
 export interface ToolInfo {
   name: ToolName;
@@ -30,7 +30,7 @@ export interface NodeInstallResult {
 export type Role = 'planner' | 'executor' | 'reviewer';
 
 /** CLI-агент, который выполняет роль. */
-export type AgentKind = 'claude' | 'codex' | 'opencode';
+export type AgentKind = 'claude' | 'codex' | 'opencode' | 'agy';
 
 /**
  * Уровни рассуждений (effort), которые понимает CLI агента: claude --effort, codex -c model_reasoning_effort.
@@ -40,6 +40,8 @@ export const EFFORTS: Record<AgentKind, readonly string[]> = {
   claude: ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh'],
   opencode: [],
+  // agy: суффикс модели (gemini-3.8-flash-high); xhigh есть не у всех моделей — тогда имя без суффикса.
+  agy: ['low', 'medium', 'high', 'xhigh'],
 };
 
 /** Уровень, если агент его понимает; иначе undefined — флаг не передаётся, решает CLI. */
@@ -58,9 +60,9 @@ export type Efforts = Partial<Record<Role, string>>;
 
 export const DEFAULT_AGENTS: Record<Role, AgentKind> = { planner: 'claude', executor: 'claude', reviewer: 'codex' };
 
-export const AGENT_KINDS: AgentKind[] = ['claude', 'codex', 'opencode'];
+export const AGENT_KINDS: AgentKind[] = ['claude', 'codex', 'opencode', 'agy'];
 
-/** Включены, пока человек не выбрал сам: opencode — по желанию, его провайдеры и модели настраивают отдельно. */
+/** Включены, пока человек не выбрал сам: opencode и agy — по желанию, их провайдеры и вход настраивают отдельно. */
 export const DEFAULT_ENABLED: AgentKind[] = ['claude', 'codex'];
 
 /** Включённые в настройках CLI-агенты; пусто или не задано — claude и codex. */

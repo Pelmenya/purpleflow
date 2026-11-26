@@ -18,6 +18,7 @@ import {
   type Slot,
   type Tiers,
 } from '../lib/presets';
+import { useDialogClose } from '../lib/useDialogClose';
 
 /** Пресеты в окне: уровни моделей по ролям — в PRESET_TIERS (lib/presets). */
 const PRESETS: { id: PresetId; title: string; text: string; icon: ReactNode }[] = [
@@ -48,7 +49,7 @@ export function QuickSetup({
   proxy,
   initialMain,
   onApply,
-  onClose,
+  onClose: closeNow,
 }: {
   installed: Record<AgentKind, boolean>;
   /** Включённые в настройках CLI: выключенный основным агентом не предлагаем. */
@@ -59,6 +60,7 @@ export function QuickSetup({
   onApply: (v: { agents: Agents; models: Models }) => Promise<void>;
   onClose: () => void;
 }) {
+  const { closing, close: onClose } = useDialogClose(closeNow);
   const [main, setMain] = useState<AgentKind>(() => {
     const start = enabled.includes(initialMain) ? initialMain : enabled[0];
     // Основной агент по умолчанию — установленный: сначала тот, что у исполнителя, иначе первый найденный.
@@ -88,7 +90,7 @@ export function QuickSetup({
   };
 
   return createPortal(
-    <div className="qs-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className={`qs-scrim ${closing ? 'is-closing' : ''}`} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="qs" role="dialog" aria-modal aria-labelledby="qs-title">
         <header className="qs-head">
           <div>

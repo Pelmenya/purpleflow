@@ -70,6 +70,14 @@ flowchart LR
 
 ## Getting started
 
+**New to the terminal?** Download the installer: it sets up PurpleFlow, Node.js, Git and the agents, and connects Claude Code, Codex and your editors to PurpleSchool models with a few toggles.
+
+| macOS | Windows | Linux |
+| --- | --- | --- |
+| [PurpleFlow-Installer.dmg](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer.dmg) | [x64](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x64.exe) · [ARM](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-arm64.exe) | [deb (Ubuntu, Debian)](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-amd64.deb) · [rpm (Fedora, RHEL)](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x86_64.rpm) · [AppImage](https://github.com/PurpleSchool/purpleflow/releases/latest/download/PurpleFlow-Installer-x86_64.AppImage) |
+
+Or step by step:
+
 You need Node.js ≥ 22.18, git, and the agents:
 
 ```bash
@@ -127,6 +135,7 @@ core/       orchestrator core, plain TypeScript, no Electron
   src/      kernel → stages/ + services/ → engine → orchestrator (see ARCHITECTURE.md)
   prompts/  stage prompts and the reviewer's JSON schema
 app/        Electron + electron-vite + React; the core runs in a utilityProcess
+installer/  one-screen installer: PurpleFlow, Node.js, Git, agents and PurpleSchool connections
 examples/   sample projects for trying runs end to end
 ```
 

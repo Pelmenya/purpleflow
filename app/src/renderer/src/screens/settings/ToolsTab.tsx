@@ -89,6 +89,12 @@ export function ToolsTab({ draft, setup }: { draft: SettingsDraft; setup: ToolSe
                   <span className="tool-miss">
                     {info.error}.{needed ? '' : ' Не обязателен: ни одна роль на нём не работает.'} Установка:{' '}
                     <code>{TOOL_INFO[t].install}</code>
+                    {TOOL_INFO[t].note ? (
+                      <>
+                        <br />
+                        {TOOL_INFO[t].note}
+                      </>
+                    ) : null}
                   </span>
                 ) : null}
               </div>

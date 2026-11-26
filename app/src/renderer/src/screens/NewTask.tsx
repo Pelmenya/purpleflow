@@ -9,6 +9,8 @@ import { MODES, stagesFor, type Mode } from '../lib/stages';
 import { MODE_ICON } from '../components/ModeIcon';
 import { NotRepoNote, ProjectPicker, WORKSPACES, loadProject, projectName, saveLoaded, type LoadedProject } from './projects/common';
 import { enabledList } from '../lib/tools';
+import { DictationButton } from '../components/Dictation';
+import { insertDictation } from '../lib/wav';
 import { bridge, cleanErr } from '../lib/api';
 
 const LAST_PROJECT = 'purpleflow.lastProject';
@@ -34,6 +36,7 @@ export function NewTaskScreen({
   const { go, state } = useStore();
   const [p, setP] = useState<LoadedProject | null>(null);
   const [task, setTask] = useState(draft?.task ?? '');
+  const taskInput = useRef<HTMLTextAreaElement>(null);
   /** Вложения прошлой части задачи — уйдут в новый прогон как есть. */
   const [carried, setCarried] = useState<string[]>(draft?.attachments ?? []);
   const [images, setImages] = useState<PickedFile[]>([]);
@@ -378,6 +381,7 @@ export function NewTaskScreen({
                 {isReview ? 'На что обратить внимание — необязательно' : 'Что сделать'}
               </label>
               <textarea
+                ref={taskInput}
                 id="task"
                 className="task-input"
                 placeholder={
@@ -402,6 +406,14 @@ export function NewTaskScreen({
                       ? 'Ревьюер ничего не правит — исправления запустите сами после разбора'
                       : 'Опишите результат, а не шаги — план составит планировщик'}
                 </span>
+                <DictationButton
+                  className="task-dictation"
+                  onText={(t) => {
+                    const el = taskInput.current;
+                    setTask((prev) => insertDictation(prev, t, el?.selectionStart ?? prev.length).value);
+                    el?.focus();
+                  }}
+                />
                 <span className="kbd-hint">
                   <kbd>{bridge.platform === 'darwin' ? '⌘' : 'Ctrl'}</kbd>
                   <kbd>Enter</kbd>

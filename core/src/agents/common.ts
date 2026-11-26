@@ -1,4 +1,4 @@
-import type { ChatMcpServer, ChatQuestion, ChatTodo, TokenUsage } from '../types.js';
+import type { ChatMcpServer, ChatQuestion, ChatTodo, PermissionState, TokenUsage } from '../types.js';
 
 /** MCP-инструмент: сервер и имя. */
 export interface McpTool {
@@ -38,6 +38,8 @@ export interface AgentRunOptions {
   onStep?: (step: AgentStep) => void;
   /** claude: присылать текст кусками по мере генерации (--include-partial-messages). */
   partial?: boolean;
+  /** claude: папка проекта — bash в песочнице Claude Code, запись только в неё, .git закрыт (правки в чате без полного доступа). */
+  sandbox?: string;
   /** codex: ID сессии (thread), чтобы продолжить её в следующем ходе чата. */
   onSession?: (id: string) => void;
 }
@@ -55,6 +57,7 @@ export type AgentStep =
   | { kind: 'tool_result'; id: string; ok: boolean; output?: string; parent?: string; approval?: McpTool }
   | { kind: 'todos'; items: ChatTodo[] }
   | { kind: 'question'; id?: string; questions: ChatQuestion[] }
+  | { kind: 'permission'; id: string; text: string; detail?: string; reason: string; state: PermissionState }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string; key?: string }
   | {
       kind: 'meta';

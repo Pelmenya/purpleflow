@@ -77,6 +77,7 @@ export function ModelsTab({ draft }: { draft: SettingsDraft }) {
             claude: claudeFound,
             codex: Boolean(tools?.codex.path && !tools.codex.error),
             opencode: Boolean(tools?.opencode?.path && !tools.opencode.error),
+            agy: Boolean(tools?.agy?.path && !tools.agy.error),
           }}
           enabled={enabled}
           proxy={proxyOn}

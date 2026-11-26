@@ -15,6 +15,7 @@ import type {
   ChatFile,
   ChatFileContent,
   ChatMessage,
+  ChatPart,
   ChatSkill,
   ChatSummary,
   DiffFile,
@@ -22,6 +23,7 @@ import type {
   PreviewState,
 } from '../types.js';
 import { effortFor, enabledAgent } from '../types.js';
+import { AGY_PROXY_DEFAULT_MODEL, type AgyPermissionAnswer } from '../agents/agy.js';
 import { PROXY_DEFAULT_MODEL } from '../agents/opencode.js';
 import { agentModel, service, serviceAgent } from './agents.js';
 import { findMentions, listSkills, mentionsBlock, walkFiles } from './mentions.js';
@@ -43,6 +45,16 @@ const chatFile = (k: Kernel, id: string) => path.join(chatsDir(k), `${id}.json`)
 /** Вложения и рабочая папка чата без проекта. */
 const chatFilesDir = (k: Kernel, id: string) => path.join(chatsDir(k), id);
 const group = (id: string) => `chat:${id}`;
+
+/** Запросы разрешений agy, которые ждут ответа человека: чат → id запроса → ответ (expired — ход кончился без ответа). */
+const asks = new Map<string, Map<string, (a: AgyPermissionAnswer | 'expired') => void>>();
+
+/** Ответ человека на запрос разрешения agy в «Правках». */
+export function answerChatPermission(id: string, requestId: string, answer: AgyPermissionAnswer): void {
+  const r = asks.get(id)?.get(requestId);
+  if (!r) throw new Error('Запрос уже не ждёт ответа');
+  r(answer);
+}
 
 /** Чат, по которому идёт ход: одна копия в памяти, чтобы сообщения в очередь и правки настроек не затирались сохранениями хода. */
 const live = new WeakMap<Kernel, Map<string, ChatFile>>();
@@ -109,7 +121,7 @@ export function getChat(k: Kernel, id: string): { chat: ChatFile; busy: boolean 
 
 export async function createChat(
   k: Kernel,
-  o: { projectPath?: string; agent?: AgentKind; model?: string; effort?: string; edits?: boolean },
+  o: { projectPath?: string; agent?: AgentKind; model?: string; effort?: string; edits?: boolean; fullAccess?: boolean; dirs?: string[] },
 ): Promise<ChatFile> {
   const now = new Date().toISOString();
   const agent = o.agent ?? (await serviceAgent(k));
@@ -123,6 +135,8 @@ export async function createChat(
     model: o.model ?? '',
     effort: effortFor(agent, o.effort),
     edits: o.edits ?? true,
+    ...((o.edits ?? true) && o.fullAccess ? { fullAccess: true } : {}),
+    ...(o.dirs?.length ? { dirs: contextDirs(o.dirs, projectPath) } : {}),
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -136,9 +150,13 @@ export async function createChat(
 export function updateChat(
   k: Kernel,
   id: string,
-  patch: Partial<Pick<ChatFile, 'title' | 'agent' | 'model' | 'effort' | 'edits'>>,
+  patch: Partial<Pick<ChatFile, 'title' | 'agent' | 'model' | 'effort' | 'edits' | 'fullAccess' | 'dirs'>>,
 ): ChatFile {
   const chat = must(k, id);
+  if (patch.dirs !== undefined) {
+    const dirs = contextDirs(patch.dirs, chat.projectPath);
+    chat.dirs = dirs.length ? dirs : undefined;
+  }
   if (patch.title !== undefined) chat.title = patch.title.trim().slice(0, 120) || chat.title;
   if (patch.agent && patch.agent !== chat.agent) chat.agent = patch.agent;
   if (patch.model !== undefined) chat.model = patch.model.trim();
@@ -146,10 +164,46 @@ export function updateChat(
   if (patch.effort !== undefined) chat.effort = patch.effort || undefined;
   chat.effort = effortFor(chat.agent, chat.effort);
   // Правила чата уходят в начале сессии: «только чтение» в ней осталось бы и после включения правок — и наоборот.
-  if (patch.edits !== undefined && patch.edits !== chat.edits) chat.session = undefined;
+  const access = (c: Pick<ChatFile, 'edits' | 'fullAccess'>) => (c.edits ? (c.fullAccess ? 'full' : 'edits') : 'read');
+  const was = access(chat);
   if (patch.edits !== undefined) chat.edits = patch.edits;
+  if (patch.fullAccess !== undefined) chat.fullAccess = patch.fullAccess || undefined;
+  // Полный доступ — только поверх правок.
+  if (!chat.edits) chat.fullAccess = undefined;
+  if (access(chat) !== was) chat.session = undefined;
   save(k, chat);
   return chat;
+}
+
+/**
+ * Папки для контекста: только существующие абсолютные каталоги, без повторов и без папки проекта —
+ * она у агента и так рабочая. Ошибка — если человек добавил то, что папкой не является.
+ */
+export function contextDirs(dirs: string[], projectPath?: string): string[] {
+  const out: string[] = [];
+  for (const raw of dirs) {
+    const d = raw.trim();
+    if (!d) continue;
+    if (!path.isAbsolute(d)) throw new Error(`Нужен полный путь к папке: ${d}`);
+    let st: fs.Stats;
+    try {
+      st = fs.statSync(d);
+    } catch {
+      throw new Error(`Папка не найдена: ${d}`);
+    }
+    if (!st.isDirectory()) throw new Error(`Это не папка: ${d}`);
+    const norm = path.resolve(d);
+    if (projectPath && path.resolve(projectPath) === norm) continue;
+    if (!out.includes(norm)) out.push(norm);
+  }
+  return out;
+}
+
+/** Папки чата в промпте хода: пути, чтобы агент знал, где искать. Удалённые с диска — пропускаем. */
+function dirsBlock(dirs: string[]): string {
+  return dirs.length
+    ? `\n\nПапки, добавленные в контекст чата (читай их, когда нужно для ответа; меняй только по прямой просьбе):\n${dirs.map((d) => `- ${d}`).join('\n')}`
+    : '';
 }
 
 export async function deleteChat(k: Kernel, id: string): Promise<void> {
@@ -188,9 +242,11 @@ function systemPrompt(k: Kernel, chat: ChatFile, cwd: string): string {
   const where = chat.projectPath
     ? `Ты работаешь в проекте ${chat.projectPath} — это рабочая папка.`
     : `Проекта нет: рабочая папка ${cwd} — временная папка этого чата.`;
-  const rules = chat.edits
-    ? 'Тебе можно менять файлы, но только когда человек об этом просит. Это небольшие задачи без плана и ревью: делай ровно то, что попросили, не трогай лишнего и не делай коммитов. В конце коротко перечисли, что изменил.'
-    : 'Режим только чтения: файлы не меняй, команды, которые что-то меняют, не запускай. Если нужна правка — предложи её текстом или посоветуй завести задачу в PurpleFlow.';
+  const rules = !chat.edits
+    ? 'Режим только чтения: файлы не меняй, команды, которые что-то меняют, не запускай. Если нужна правка — предложи её текстом или посоветуй завести задачу в PurpleFlow.'
+    : chat.fullAccess
+      ? 'Режим полного доступа: можно менять файлы, работать с git (коммиты, ветки), управлять процессами и запускать любые команды — но только когда человек об этом просит. Делай ровно то, что попросили, не трогай лишнего; коммиты, пуш и остановку процессов — только по прямой просьбе. В конце коротко перечисли, что сделал.'
+      : 'Тебе можно менять файлы проекта, но только когда человек об этом просит. Это небольшие задачи без плана и ревью: делай ровно то, что попросили, не трогай лишнего и не делай коммитов. Git на запись, остановка процессов и файлы вне проекта в этом режиме закрыты песочницей — если без них не обойтись, скажи, что нужен режим «Полный доступ». В конце коротко перечисли, что изменил.';
   let s = `Ты — ассистент в чате PurpleFlow. ${where} ${rules} Отвечай по-русски, по делу, в Markdown.`;
   if (chat.projectPath) {
     const kn = knowledgeOf(k, chat.projectPath);
@@ -248,6 +304,27 @@ export async function allowChatMcp(k: Kernel, id: string, t: { server: string; t
   } else if (!has(chat.mcpOnce)) chat.mcpOnce = [...(chat.mcpOnce ?? []), tool];
   save(k, chat);
   await sendChat(k, id, `Разрешаю вызов ${tool.server} · ${tool.tool} — повтори его.`);
+}
+
+/** Агент сам говорит, что нужен полный доступ: правила режима правок просят его назвать режим «Полный доступ». */
+const ASKS_FULL_ACCESS = /полн\S* доступ/i;
+
+/**
+ * Ход упёрся в ограничения правок. По выводу команды это видно не всегда: codex (0.172) отказ песочницы
+ * не присылает событием command_execution — только текстом ответа. Поэтому ещё и по просьбе агента в тексте.
+ */
+export function needsFullAccess(parts: ChatPart[]): boolean {
+  return parts.some((p) => (p.kind === 'tool' && p.sandboxDenied) || (p.kind === 'text' && ASKS_FULL_ACCESS.test(p.text)));
+}
+
+/**
+ * Песочница правок не пустила команду: включить чату полный доступ и попросить повторить.
+ * Смена режима начинает новую сессию — переписка уйдёт агенту пересказом.
+ */
+export async function grantChatFullAccess(k: Kernel, id: string): Promise<void> {
+  if (k.chatBusy.has(id)) throw new Error('Агент отвечает — дайте доступ после ответа');
+  updateChat(k, id, { edits: true, fullAccess: true });
+  await sendChat(k, id, 'Включил полный доступ — повтори то, что не пустила песочница.');
 }
 
 /**
@@ -340,6 +417,11 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
     applyStep(acc, st);
     if (!timer) timer = setTimeout(flush, FLUSH_MS);
   };
+  /** Сразу в окно: карточка запроса не должна ждать следующего куска ответа. */
+  const flushNow = () => {
+    if (timer) clearTimeout(timer);
+    flush();
+  };
 
   let res: AgentResult;
   let changed: string[] | undefined;
@@ -363,6 +445,8 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
     let prompt = (session ? '' : historyBlock(prevMessages)) + (text.trim() || 'Посмотри вложения.');
     if (others.length) prompt += `\n\nПрикреплённые файлы (открой и прочитай):\n${others.map((f) => `- ${f}`).join('\n')}`;
     // @файлы и /скиллы из сообщения — отдельным блоком: CLI в неинтерактивном режиме их сами не разворачивают.
+    const dirs = (chat.dirs ?? []).filter((d) => fs.existsSync(d));
+    if (!compact) prompt += dirsBlock(dirs);
     prompt += mentionsBlock(findMentions(said, cwd, listSkills({ projectPath: chat.projectPath, userConfig: Boolean(s.userConfig) })));
     // Сжатие — встроенная команда CLI: только она, без истории и вложений.
     if (compact) prompt = '/compact';
@@ -382,7 +466,7 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
       onStep,
       proxy: s.proxy.baseUrl ? s.proxy : undefined,
       userConfig: s.userConfig,
-      addDirs: attachments.length ? [path.dirname(attachments[0])] : undefined,
+      addDirs: [...dirs, ...(attachments.length ? [path.dirname(attachments[0])] : [])].filter((d, i, all) => all.indexOf(d) === i),
     };
     if (agent === 'opencode') {
       let sid = session;
@@ -392,12 +476,56 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
         systemPrompt: session ? undefined : sys,
         images,
         readOnly: !chat.edits,
+        limited: chat.edits && !chat.fullAccess,
         resumeSession: session,
         onSession: (id) => {
           sid = id;
         },
       });
       if (sid) chat.session = { agent, id: sid };
+    } else if (agent === 'agy') {
+      let conv = session;
+      const waiting = new Map<string, (a: AgyPermissionAnswer | 'expired') => void>();
+      asks.set(id, waiting);
+      try {
+        res = await k.agy({
+          ...common,
+          prompt,
+          systemPrompt: session ? undefined : sys,
+          images,
+          // В «Правках» действие вне режима решает человек: карточка в ответе, agy ждёт.
+          askPermission:
+            chat.edits && !chat.fullAccess
+              ? (q) =>
+                  new Promise<AgyPermissionAnswer>((resolve) => {
+                    waiting.set(q.id, (a) => {
+                      waiting.delete(q.id);
+                      onStep({ kind: 'permission', ...q, state: a === 'deny' ? 'denied' : a });
+                      flushNow();
+                      resolve(a === 'expired' ? 'deny' : a);
+                    });
+                    onStep({ kind: 'permission', ...q, state: 'pending' });
+                    flushNow();
+                  })
+              : undefined,
+          allowed: chat.agyAllow,
+          onAllow: (key) => {
+            chat.agyAllow = [...new Set([...(chat.agyAllow ?? []), key])];
+          },
+          // Режимы чата: решения по каждому запросу разрешения agy (ACP), как песочницы codex и claude.
+          readOnly: !chat.edits,
+          limited: chat.edits && !chat.fullAccess,
+          resumeConversation: session,
+          onSession: (sid) => {
+            conv = sid;
+          },
+        });
+      } finally {
+        // Ход кончился (ответ, стоп, сбой) — неотвеченные карточки гаснут, agy уже не ждёт.
+        for (const r of [...waiting.values()]) r('expired');
+        asks.delete(id);
+      }
+      if (conv) chat.session = { agent, id: conv };
     } else if (agent === 'codex') {
       let thread = session;
       res = await k.codex({
@@ -405,7 +533,7 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
         prompt,
         systemPrompt: session ? undefined : sys,
         images,
-        sandbox: chat.edits ? 'workspace-write' : 'read-only',
+        sandbox: !chat.edits ? 'read-only' : chat.fullAccess ? 'danger-full-access' : 'workspace-write',
         persist: true,
         resumeThread: session,
         mcpApprove: [...(chat.mcpAllow ?? []), ...(chat.mcpOnce ?? [])],
@@ -428,6 +556,8 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
         resume: session,
         sessionId: session ? undefined : sessionId,
         tools: chat.edits ? undefined : ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'],
+        // Правки без полного доступа: bash в песочнице Claude Code — запись только в проект, .git закрыт.
+        sandbox: chat.edits && !chat.fullAccess ? cwd : undefined,
       });
       // Сессия сохраняется, только если claude успел её начать.
       if (res.ok || parts.length) chat.session = { agent, id: sessionId };
@@ -460,6 +590,7 @@ async function turn(k: Kernel, chat: ChatFile, batch: ChatMessage[], compact = f
   answer.pending = false;
   answer.usage = res.usage;
   if (changed?.length) answer.changedFiles = [...new Set(changed)];
+  if (chat.edits && !chat.fullAccess && !res.stopped && needsFullAccess(parts)) answer.needsFullAccess = true;
   if (res.stopped) answer.stopped = true;
   else if (!res.ok) answer.error = res.error ?? 'Агент не ответил';
   save(k, chat);
@@ -581,7 +712,8 @@ export function chatDefaultModel(k: Kernel, agent: AgentKind): string {
   const s = k.opts.getSettings();
   const model = agentModel(k, agent, s.agents, s.models);
   // opencode с AI-прокси без своей модели идёт в модель прокси по умолчанию — её и показываем.
-  return model || (agent === 'opencode' && s.proxy.baseUrl ? PROXY_DEFAULT_MODEL : '');
+  if (model || !s.proxy.baseUrl) return model;
+  return agent === 'opencode' ? PROXY_DEFAULT_MODEL : agent === 'agy' ? AGY_PROXY_DEFAULT_MODEL : '';
 }
 
 /**

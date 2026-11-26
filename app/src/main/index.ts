@@ -25,7 +25,8 @@ import { releases } from './releases';
 import { bugReportUrl } from '../shared/bugReport';
 import * as account from './account';
 import { proxyModels } from './models';
-import { isLocalUrl, isSameDocument, isWebUrl } from '../shared/urls';
+import { cancelDownload, dictationStatus, downloadModel, fakeMicFromEnv, micAccess, removeModel, transcribe } from './dictation';
+import { isLocalUrl, isSamePage, isWebUrl } from '../shared/urls';
 import type { UpdateState } from '../shared/update';
 import { errorReportingActive, initErrorReporting } from './error-reporting';
 import { ignoreClosedOutput } from './stdio';
@@ -49,6 +50,8 @@ else {
   const legacy = path.join(app.getPath('appData'), 'PS Flow');
   if (fs.existsSync(legacy)) app.setPath('userData', legacy);
 }
+// e2e: микрофон из файла (PURPLEFLOW_FAKE_MIC) — до старта Chromium.
+fakeMicFromEnv();
 
 // После выбора профиля: настройка отчётов лежит в нём.
 ignoreClosedOutput();
@@ -371,16 +374,19 @@ function createWindow() {
     if (process.env.PURPLEFLOW_CAPTURE) win?.showInactive();
     else win?.show();
   });
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  const { webContents } = win;
+  webContents.setWindowOpenHandler(({ url }) => {
     if (isWebUrl(url)) void shell.openExternal(url);
     return { action: 'deny' };
   });
   // Ссылка из Markdown (комментарий PR, ответ агента) или брошенный на окно файл не должны заменять приложение:
   // чужая страница получила бы window.purpleflow со всеми правами окна.
-  win.webContents.on('will-navigate', (ev, url) => {
-    if (isSameDocument(url, win?.webContents.getURL() ?? '')) return;
+  // Переходы по якорям не вызывают will-navigate и продолжают работать.
+  webContents.on('will-navigate', (ev) => {
+    // location.reload() тоже идёт через will-navigate: кнопка «Перезагрузить окно» и полная перезагрузка Vite.
+    if (ev.url === webContents.getURL()) return;
     ev.preventDefault();
-    if (isWebUrl(url)) void shell.openExternal(url);
+    if (isWebUrl(ev.url) && !isSamePage(ev.url, webContents.getURL())) void shell.openExternal(ev.url);
   });
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -505,6 +511,17 @@ handle('dialog:folder', async (_e, title?: string) => {
     title: typeof title === 'string' ? title : 'Папка проекта (git-репозиторий)',
   });
   return r.canceled ? null : r.filePaths[0];
+});
+handle('dictation:status', () => dictationStatus());
+handle('dictation:download', (_e, id: string) =>
+  downloadModel(String(id), (share) => win?.webContents.send('dictation:progress', String(id), share)),
+);
+handle('dictation:cancel', (_e, id: string) => cancelDownload(String(id)));
+handle('dictation:remove', (_e, id: string) => removeModel(String(id)));
+handle('dictation:mic', () => micAccess());
+handle('dictation:transcribe', (_e, wav: Uint8Array, model: string, lang: string) => {
+  if (!(wav instanceof Uint8Array)) throw new Error('Нет записи');
+  return transcribe(wav, String(model), String(lang));
 });
 handle('dialog:file', async () => {
   const r = await dialog.showOpenDialog(win!, { properties: ['openFile', 'showHiddenFiles'], title: 'Исполняемый файл' });
