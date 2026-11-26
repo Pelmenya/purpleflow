@@ -12,6 +12,7 @@ export interface CoreOptions {
   /** Окружение login-шелла пользователя (см. loadLoginShellEnv). */
   env: NodeJS.ProcessEnv;
   getSettings: () => CoreSettings;
+  allowProject?: (projectPath: string) => boolean;
   /** Подмена агентов — для тестов конвейера без настоящих claude и codex. */
   runners?: { claude?: typeof runClaude; codex?: typeof runCodex; opencode?: typeof runOpencode; agy?: typeof runAgy };
 }

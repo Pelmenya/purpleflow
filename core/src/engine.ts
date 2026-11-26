@@ -33,9 +33,18 @@ import { traced } from './trace.js';
 import type { AgentKind, Efforts, GateId, ReviewTarget, Role, RunFile, StartRunInput } from './types.js';
 import { DEFAULT_AGENTS, effortFor, enabledAgent } from './types.js';
 
+function projectAllowed(k: Kernel, projectPath: string): boolean {
+  try {
+    return k.opts.allowProject?.(projectPath) ?? true;
+  } catch {
+    return false;
+  }
+}
+
 /** После перезапуска приложения: прогоны, оборванные посреди стадии, помечаются остановленными. */
 export async function recover(k: Kernel): Promise<void> {
   for (const s of k.store.list()) {
+    if (!projectAllowed(k, s.projectPath)) continue;
     // Агенты и тесты, пережившие аварийный выход приложения, не должны писать в worktree параллельно с повтором стадии.
     for (const group of runProcessGroups(s.id)) {
       const pids = k.store.readPids(group);
@@ -83,6 +92,7 @@ export async function recover(k: Kernel): Promise<void> {
 }
 
 export async function start(k: Kernel, input: StartRunInput): Promise<string> {
+  if (!projectAllowed(k, input.projectPath)) throw new Error('Проект не допущен службой');
   const s = k.opts.getSettings();
   // Нужны только агенты, выбранные для ролей: на машине может стоять один claude или один codex.
   // Выключенный в настройках CLI роль не выполняет: она переходит на включённый, с его моделью по умолчанию.
@@ -303,7 +313,7 @@ export function maxParallel(k: Kernel): number {
 
 /** Прогоны, в которых сейчас работают агенты. Ожидание решения человека место не занимает. */
 export function activeCount(k: Kernel): number {
-  return k.store.list().filter((r) => r.status === 'running').length;
+  return k.store.list().filter((r) => r.status === 'running' && projectAllowed(k, r.projectPath)).length;
 }
 
 /** Запустить из очереди столько прогонов, сколько есть свободных мест (старые — первыми). */
@@ -314,7 +324,7 @@ export async function pump(k: Kernel) {
     while (activeCount(k) < maxParallel(k)) {
       const next = k.store
         .list()
-        .filter((r) => r.status === 'queued')
+        .filter((r) => r.status === 'queued' && projectAllowed(k, r.projectPath))
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
       if (!next) break;
       const run = k.store.load(next.id);
