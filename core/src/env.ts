@@ -13,7 +13,7 @@ const MARK = '__PURPLEFLOW_ENV__';
  * Приложение, запущенное из Finder/Dock, получает урезанный PATH (/usr/bin:/bin…).
  * Берём окружение login+interactive шелла пользователя — так же, как это делают shell-env/fix-path.
  */
-const BASE_VARS = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', '__CF_USER_TEXT_ENCODING'];
+export const BASE_VARS = ['HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE', '__CF_USER_TEXT_ENCODING'];
 
 /**
  * Сеть приложения: прокси и корпоративные сертификаты, с которыми его запустили (`open -a PurpleFlow --env HTTPS_PROXY=…`,
