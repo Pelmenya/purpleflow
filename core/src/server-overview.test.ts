@@ -147,7 +147,10 @@ test('обзор: две сессии видят одинаковую непус
   const second = new CookieJar();
   const firstLogin = await first.login(origin);
   assert.equal(firstLogin.status, 303);
-  assert.match(firstLogin.headers.get('set-cookie') ?? '', /^pf_session=[\w-]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=43200$/);
+  assert.match(
+    firstLogin.headers.get('set-cookie') ?? '',
+    /^pf_session=[\w-]+; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=43200$/,
+  );
   assert.equal((await second.login(origin)).status, 303);
 
   const firstResponse = await first.request(origin, '/api/overview');

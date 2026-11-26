@@ -8,7 +8,8 @@ export interface Sessions {
   guard(req: IncomingMessage, res: ServerResponse): boolean;
 }
 
-export type LoginResult = { kind: 'token'; token: string } | { kind: 'invalid' } | { kind: 'rateLimited'; retryAfterSec: number };
+export type LoginResult =
+  { kind: 'token'; token: string; maxAgeSec: number } | { kind: 'invalid' } | { kind: 'rateLimited'; retryAfterSec: number };
 
 export type BodyResult = { kind: 'ok'; body: string } | { kind: 'bodyTooLarge' } | { kind: 'timeout' } | { kind: 'aborted' };
 
@@ -56,7 +57,7 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
       let token = randomBytes(32).toString('base64url');
       while (sessions.has(token)) token = randomBytes(32).toString('base64url');
       sessions.set(token, current + ttlMs);
-      return { kind: 'token', token };
+      return { kind: 'token', token, maxAgeSec: Math.max(1, Math.ceil(ttlMs / 1000)) };
     },
     validate,
     logout(token) {

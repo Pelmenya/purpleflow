@@ -72,6 +72,19 @@ function sessionToken(req: IncomingMessage): string {
   return '';
 }
 
+const runRoute = /^\/runs\/([^/]+)$/;
+const readMethods = ['GET'] as const;
+const routeMethods: Readonly<Record<string, readonly string[]>> = {
+  '/': readMethods,
+  '/api/overview': readMethods,
+  '/login': ['GET', 'POST'],
+  '/logout': ['POST'],
+};
+
+function allowedMethods(route: string): readonly string[] | undefined {
+  return runRoute.test(route) ? readMethods : routeMethods[route];
+}
+
 export function createServerApp(config: ServerConfig, host: Host, opts: { now?: () => number; sessions?: Sessions } = {}): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
   return async (req, res) => {
@@ -87,7 +100,8 @@ export function createServerApp(config: ServerConfig, host: Host, opts: { now?: 
     }
     const route = url.pathname;
     const method = req.method ?? '';
-    const publicLogin = route === '/login' && (method === 'GET' || method === 'POST');
+    const methods = allowedMethods(route);
+    const publicLogin = route === '/login' && methods?.includes(method) === true;
     if (!publicLogin && !sessions.guard(req, res)) return;
 
     try {
@@ -120,7 +134,7 @@ export function createServerApp(config: ServerConfig, host: Host, opts: { now?: 
         res
           .writeHead(303, {
             Location: returnTo,
-            'Set-Cookie': `pf_session=${result.token}; HttpOnly; Secure; SameSite=Strict; Path=/`,
+            'Set-Cookie': `pf_session=${result.token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${result.maxAgeSec}`,
           })
           .end();
         return;
@@ -142,17 +156,20 @@ export function createServerApp(config: ServerConfig, host: Host, opts: { now?: 
         send(res, 200, JSON.stringify(await host.snapshot()), 'application/json; charset=utf-8');
         return;
       }
-      const runMatch = /^\/runs\/([^/]+)$/.exec(route);
+      const runMatch = runRoute.exec(route);
       if (runMatch && method === 'GET') {
         const page = runPage(await host.snapshot(), runMatch[1]!);
         if (page === undefined) send(res, 404, 'Прогон не найден');
         else html(res, 200, page);
         return;
       }
-      const knownRoute = route === '/' || route === '/login' || route === '/logout' || route === '/api/overview' || runMatch !== null;
-      send(res, knownRoute ? 405 : 404, knownRoute ? 'Метод не поддерживается' : 'Не найдено', 'text/plain; charset=utf-8', {
-        Allow: knownRoute && route !== '/login' && route !== '/logout' ? 'GET' : 'POST',
-      });
+      send(
+        res,
+        methods ? 405 : 404,
+        methods ? 'Метод не поддерживается' : 'Не найдено',
+        'text/plain; charset=utf-8',
+        methods ? { Allow: methods.join(', ') } : {},
+      );
     } catch {
       if (!res.headersSent) send(res, 500, 'Внутренняя ошибка');
       else res.destroy();
