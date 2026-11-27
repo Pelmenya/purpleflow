@@ -288,7 +288,7 @@ test(
     const store = fixture.core.kernel.store;
     const load = store.load.bind(store);
     const loaded: string[] = [];
-    t.mock.method(store, 'load', (id) => {
+    t.mock.method(store, 'load', (id: string) => {
       loaded.push(id);
       return load(id);
     });
