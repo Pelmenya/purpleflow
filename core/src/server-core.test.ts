@@ -319,8 +319,11 @@ test('остановка службы: активный прогон восст�
 
   next.kernel.pumping = false;
   next.settingsChanged();
-  await until(() => calls === 2 && next.kernel.mustLoad(first.runId).status === 'waiting');
-  assert.equal(calls, 2);
+  // Ожидание решения человека место не занимает: как только A ждёт, очередь сразу берёт B.
+  // Ждём, пока оба встанут в ожидание: иначе третий вызов агента проскакивает между опросами,
+  // а git прогона B ещё пишет в репозиторий, когда тест убирает временный каталог.
+  await until(() => next.kernel.mustLoad(first.runId).status === 'waiting' && next.kernel.mustLoad(second.runId).status === 'waiting');
+  assert.equal(calls, 3);
 });
 
 test('остановка службы: оборванная проверка не записывается', unix, async (t) => {
