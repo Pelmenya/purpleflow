@@ -248,3 +248,56 @@ test('хост: intent неудачного старта и ожидания, ч
   fixture.core.kernel.save({ ...own, waitId: 'after-unsubscribe' });
   assert.equal(events.filter(({ runId }) => runId === own.id).length, 3);
 });
+
+
+test(
+  'хост: intents загружает полные записи только для своих ожидающих и остановленных прогонов',
+  { skip: serverTestsSkip, timeout: 60_000 },
+  async (t) => {
+    const fixture = await startTestHost();
+    const foreignPath = makeRepo();
+    t.after(async () => {
+      await fixture.close();
+      for (const dir of [fixture.dataDir, fixture.project.path, foreignPath]) {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+      }
+    });
+    waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate1', status: 'running' });
+    const waiting = waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate1', waitId: 'host-wait' });
+    const stopped = waitingRunFixture(fixture.dataDir, fixture.project.path, {
+      next: 'gate1',
+      status: 'stopped',
+      stop: { reason: 'checks_red', id: 'host-stop', at: new Date().toISOString() },
+    });
+    const silentlyStopped = waitingRunFixture(fixture.dataDir, fixture.project.path, {
+      next: 'gate1',
+      status: 'stopped',
+      stop: { reason: 'user_stop', id: 'host-user-stop', at: new Date().toISOString() },
+    });
+    waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate1', status: 'cancelled' });
+    waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate1', status: 'finished' });
+    waitingRunFixture(fixture.dataDir, foreignPath, { next: 'gate1', waitId: 'foreign-wait' });
+    waitingRunFixture(fixture.dataDir, foreignPath, {
+      next: 'gate1',
+      status: 'stopped',
+      stop: { reason: 'checks_red', id: 'foreign-stop', at: new Date().toISOString() },
+    });
+    const missing = waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate1', workspacePending: true });
+    fs.rmSync(path.join(fixture.dataDir, 'runs', `${missing.id}.json`));
+
+    const store = fixture.core.kernel.store;
+    const load = store.load.bind(store);
+    const loaded: string[] = [];
+    t.mock.method(store, 'load', (id) => {
+      loaded.push(id);
+      return load(id);
+    });
+
+    const intents = fixture.host.intents();
+    assert.deepEqual(loaded.sort(), [waiting.id, stopped.id, silentlyStopped.id].sort());
+    assert.deepEqual(
+      intents.map((intent) => intent.key).sort(),
+      [`wait:${waiting.id}:host-wait`, `stopped:${stopped.id}:host-stop`].sort(),
+    );
+  },
+);
