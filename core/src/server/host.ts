@@ -48,6 +48,7 @@ export interface HostSnapshot {
 
 export type DecideResult =
   { status: 'ok' | 'conflict'; snapshot: RunFile } | { status: 'notFound' } | { status: 'invalid'; message: string };
+export type StopResult = { status: 'ok' } | { status: 'notFound' } | { status: 'conflict'; snapshot: RunFile };
 
 export interface Host {
   snapshot(): Promise<HostSnapshot>;
@@ -57,6 +58,7 @@ export interface Host {
   readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
   readDiff(id: string): Promise<{ run: RunFile; diff: DiffFile[] | null } | null>;
   decide(runId: string, command: ExpectedDecision): Promise<DecideResult>;
+  stop(id: string): Promise<StopResult>;
   close(): Promise<void>;
 }
 
@@ -139,6 +141,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       env: opts.agentEnv,
       getSettings: () => opts.settings,
       allowProject,
+      keepFailedStart: true,
       runners: opts.runners,
     });
     if (opts.onEvent) core.on(opts.onEvent);
@@ -371,6 +374,13 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         snapshot = await readRun(runId);
         if (!snapshot) return { status: 'notFound' };
         return { status: result.ok ? 'ok' : 'conflict', snapshot };
+      },
+      async stop(id) {
+        if (!(await readRun(id))) return { status: 'notFound' };
+        const result = await runningCore.stopActive(id);
+        if (result.ok) return { status: 'ok' };
+        const snapshot = await readRun(id);
+        return snapshot ? { status: 'conflict', snapshot } : { status: 'notFound' };
       },
       close() {
         if (closing) return closing;

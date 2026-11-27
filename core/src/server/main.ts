@@ -158,7 +158,11 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
   };
   const message = run.message ? `<p data-run-message>${escapeHtml(run.message)}</p>` : '';
   const logLink = `<p><a href="/runs/${encodeURIComponent(run.id)}/log">Журнал</a></p>`;
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
+  const stopForm =
+    run.status === 'running' || run.status === 'queued'
+      ? `<form method="post" action="/runs/${encodeURIComponent(run.id)}/stop"><button type="submit">Остановить</button></form>`
+      : '';
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${stopForm}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
@@ -199,6 +203,7 @@ function decisionFromForm(form: URLSearchParams): ExpectedDecision {
 
 const runRoute = /^\/runs\/([^/]+)$/;
 const runLogRoute = /^\/runs\/([^/]+)\/log$/;
+const runStopRoute = /^\/runs\/([^/]+)\/stop$/;
 const runDecisionRoute = /^\/runs\/([^/]+)\/decision$/;
 const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
 const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
@@ -214,7 +219,7 @@ registerReturnRoute(/^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0
 
 function allowedMethods(route: string): readonly string[] | undefined {
   if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route)) return readMethods;
-  if (runDecisionRoute.test(route) || projectRunsRoute.test(route)) return ['POST'];
+  if (runStopRoute.test(route) || runDecisionRoute.test(route) || projectRunsRoute.test(route)) return ['POST'];
   return routeMethods.get(route);
 }
 
@@ -330,6 +335,32 @@ export function createServerApp(
         }
         if (result.status === 'notFound') send(res, 404, 'Проект не найден');
         else html(res, result.status === 'rejected' ? 400 : 409, startResultPage(result, projectId));
+        return;
+      }
+      const runStopMatch = runStopRoute.exec(route);
+      if (runStopMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const body = await readBody(req);
+        if (body.kind === 'bodyTooLarge' || body.kind === 'timeout') {
+          rejectBody(res, body.kind);
+          return;
+        }
+        if (body.kind === 'aborted') return;
+        const runId = runStopMatch[1]!;
+        const result = await host.stop(runId);
+        if (result.status === 'ok') {
+          res.writeHead(303, { Location: `/runs/${encodeURIComponent(runId)}` }).end();
+          return;
+        }
+        if (result.status === 'notFound') send(res, 404, 'Прогон не найден');
+        else {
+          const view = await readRunView(host, result.snapshot);
+          if (view) html(res, 409, runPage(await host.snapshot(), view.run, 'Прогон уже изменил состояние', view.docs, view.diff));
+          else send(res, 404, 'Прогон не найден');
+        }
         return;
       }
       const runDecisionMatch = runDecisionRoute.exec(route);

@@ -77,7 +77,7 @@ export class Browser {
   async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.cookie) headers.set('Cookie', this.cookie);
-    if ((init.method ?? 'GET').toUpperCase() === 'POST') headers.set('Origin', PUBLIC_ORIGIN);
+    if ((init.method ?? 'GET').toUpperCase() === 'POST' && !headers.has('Origin')) headers.set('Origin', PUBLIC_ORIGIN);
     const response = await fetch(`${origin}${route}`, { redirect: 'manual', ...init, headers });
     const cookie = response.headers.get('set-cookie');
     if (cookie) this.cookie = cookie.split(';', 1)[0] ?? '';
