@@ -249,7 +249,6 @@ test('хост: intent неудачного старта и ожидания, ч
   assert.equal(events.filter(({ runId }) => runId === own.id).length, 3);
 });
 
-
 test(
   'хост: intents загружает полные записи только для своих ожидающих и остановленных прогонов',
   { skip: serverTestsSkip, timeout: 60_000 },

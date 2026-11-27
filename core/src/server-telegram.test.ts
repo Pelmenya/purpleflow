@@ -177,10 +177,7 @@ test('телеграм: attentionLink строит обе ссылки при и
   const [code, signal] = await within(once(child, 'exit'));
   assert.equal(code, 0, stderr);
   assert.equal(signal, null);
-  assert.deepEqual(JSON.parse(stdout), [
-    `https://purpleflow.example/runs/${runId}`,
-    `https://purpleflow.example/runs/${runId}/log`,
-  ]);
+  assert.deepEqual(JSON.parse(stdout), [`https://purpleflow.example/runs/${runId}`, `https://purpleflow.example/runs/${runId}/log`]);
 });
 
 test('телеграм: ожидание доставляется один раз со ссылкой на прогон', async (t) => {

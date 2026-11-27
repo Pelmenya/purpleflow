@@ -455,11 +455,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       intents() {
         const intents: AttentionIntent[] = [];
         for (const summary of runningCore.kernel.store.list()) {
-          if (
-            summary.missing ||
-            (summary.status !== 'waiting' && summary.status !== 'stopped') ||
-            !allowProject(summary.projectPath)
-          )
+          if (summary.missing || (summary.status !== 'waiting' && summary.status !== 'stopped') || !allowProject(summary.projectPath))
             continue;
           const run = readAllowedRun(summary.id);
           const intent = run ? attentionIntent(run) : null;
