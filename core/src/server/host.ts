@@ -2,9 +2,9 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import { Orchestrator } from '../orchestrator.js';
 import type { CoreSettings, RunStatus, StageId } from '../types.js';
 import type { Listener } from '../runtime.js';
+import { createServerCore, type ServerCore } from './guard.js';
 
 export interface StartHostOptions {
   dataDir: string;
@@ -58,7 +58,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
   fs.mkdirSync(opts.dataDir, { recursive: true });
   const realDataDir = fs.realpathSync(opts.dataDir);
   const server = net.createServer((socket) => socket.destroy());
-  let core: Orchestrator | undefined;
+  let core: ServerCore | undefined;
 
   try {
     await listen(server, lockAddress(realDataDir)).catch((error: NodeJS.ErrnoException) => {
@@ -86,7 +86,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       }
     };
 
-    core = new Orchestrator({
+    core = createServerCore({
       dataDir: realDataDir,
       promptsDir: opts.promptsDir,
       env: opts.agentEnv,
