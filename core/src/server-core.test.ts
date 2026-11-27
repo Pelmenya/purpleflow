@@ -319,8 +319,9 @@ test('остановка службы: активный прогон восст�
 
   next.kernel.pumping = false;
   next.settingsChanged();
-  await until(() => calls === 2 && next.kernel.mustLoad(first.runId).status === 'waiting');
-  assert.equal(calls, 2);
+  // Ожидание решения человека место не занимает: как только A ждёт, очередь берёт B, и
+  // третий вызов агента может случиться между опросами. Поэтому ждём A, а не ровно два вызова.
+  await until(() => calls >= 2 && next.kernel.mustLoad(first.runId).status === 'waiting');
 });
 
 test('остановка службы: оборванная проверка не записывается', unix, async (t) => {
