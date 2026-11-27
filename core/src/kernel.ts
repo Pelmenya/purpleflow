@@ -14,6 +14,7 @@ import { Prompts } from './prompts.js';
 import { type BasePrep, type CoreOptions, type Listener, StopSignal, type Tools } from './runtime.js';
 import { STAGE_TITLES, isGate } from './stage-info.js';
 import { RunStore } from './store.js';
+import { stopRecord } from './stop-record.js';
 import { setTraceFile } from './trace.js';
 import type { CoreEvent, FinishReason, PreviewState, ReviewItem, RunFile, StageAttempt, StageId } from './types.js';
 import { AGENT_KINDS, enabledAgents, type AgentKind } from './types.js';
@@ -216,6 +217,7 @@ export class Kernel {
     for (const a of run.attempts)
       if (a.status === 'running' && !isGate(a.stage)) Object.assign(a, { status: 'stopped', endedAt: new Date().toISOString() });
     run.status = 'stopped';
+    run.stop = stopRecord(reason);
     run.message = message;
     this.save(run);
     this.log(run, c.amber(`■ ${message}`) + '\n');
@@ -228,6 +230,7 @@ export class Kernel {
     for (const a of run.attempts)
       if (a.status === 'running') Object.assign(a, { status: 'failed', endedAt: new Date().toISOString(), error });
     run.status = 'stopped';
+    run.stop = stopRecord('stage_failed');
     run.message = error;
     this.save(run);
     this.log(run, c.coral(`✗ ${error}`) + '\n');
