@@ -198,3 +198,38 @@ test('порог покрытия: модуль только с типами н�
   const result = run(dir);
   assert.equal(result.status, 0, result.output);
 });
+
+test('порог покрытия: серверные файлы исполняются последовательно', linux, (t) => {
+  const dir = project(t);
+  write(dir, 'src/server/m.ts', MODULE);
+  const serialTest = `import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import { test } from 'node:test';
+import { a, b } from './server/m.js';
+
+test('последовательность', async () => {
+  assert.equal(a(1), 1);
+  assert.equal(a(-1), -1);
+  assert.equal(b(), 2);
+  const lock = ${JSON.stringify(path.join(dir, 'lock'))};
+  const overlap = ${JSON.stringify(path.join(dir, 'overlap'))};
+  try {
+    fs.mkdirSync(lock);
+  } catch {
+    fs.writeFileSync(overlap, 'parallel');
+    return;
+  }
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(fs.existsSync(overlap), false);
+  } finally {
+    fs.rmSync(lock, { recursive: true, force: true });
+  }
+});
+`;
+  write(dir, 'src/server-first.test.ts', serialTest);
+  write(dir, 'src/server-second.test.ts', serialTest);
+
+  const result = run(dir);
+  assert.equal(result.status, 0, result.output);
+});
