@@ -3,11 +3,14 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { ShuttingDownError } from '../kernel.js';
+import { gateMessage } from '../gates.js';
 import type { Orchestrator } from '../orchestrator.js';
 import type { CoreOptions, Listener } from '../runtime.js';
+import { isGate } from '../stage-info.js';
 import { writeAtomic } from '../store.js';
-import type { CoreSettings, RunFile, RunStatus, StageId } from '../types.js';
+import type { CoreSettings, GateId, RunFile, RunStatus, StageId } from '../types.js';
 import type { ServerProject } from './config.js';
+import type { ExpectedDecision } from './decisions.js';
 import { createServerCore, type ServerCore } from './guard.js';
 
 export interface StartHostOptions {
@@ -30,13 +33,27 @@ export type StartTaskResult =
 
 export interface HostSnapshot {
   projects: { id: string; name: string }[];
-  runs: { id: string; projectId: string; title: string; status: RunStatus; next: StageId }[];
+  runs: {
+    id: string;
+    projectId: string;
+    title: string;
+    status: RunStatus;
+    next: StageId;
+    waitId?: string;
+    gate?: GateId;
+    reason?: string;
+    limit?: { cause: 'loop' | 'attempts'; attempts: number; max: number };
+  }[];
 }
+
+export type DecideResult =
+  { status: 'ok' | 'conflict'; snapshot: RunFile } | { status: 'notFound' } | { status: 'invalid'; message: string };
 
 export interface Host {
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   readRun(id: string): Promise<RunFile | null>;
+  decide(runId: string, command: ExpectedDecision): Promise<DecideResult>;
   close(): Promise<void>;
 }
 
@@ -207,9 +224,8 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
     return {
       async snapshot() {
         const runs = await runningCore.listRuns();
-        return {
-          projects: projects.map(({ id, name }) => ({ id, name })),
-          runs: runs.flatMap((run) => {
+        const summaries = await Promise.all(
+          runs.map(async (run): Promise<HostSnapshot['runs']> => {
             let realPath: string;
             try {
               realPath = fs.realpathSync(run.projectPath);
@@ -217,8 +233,34 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
               return [];
             }
             const project = projectByPath.get(realPath);
-            return project ? [{ id: run.id, projectId: project.id, title: run.title, status: run.status, next: run.next }] : [];
+            if (!project) return [];
+            const summary = { id: run.id, projectId: project.id, title: run.title, status: run.status, next: run.next };
+            if (run.status !== 'waiting' || !isGate(run.next)) return [summary];
+            const full = await runningCore.getRun(run.id);
+            if (!full) return [summary];
+            const gate = run.next as GateId;
+            return [
+              {
+                ...summary,
+                waitId: full.waitId,
+                gate,
+                reason: gateMessage(runningCore.kernel, full) ?? full.message,
+                ...(gate === 'limit'
+                  ? {
+                      limit: {
+                        cause: full.stuck ? ('loop' as const) : ('attempts' as const),
+                        attempts: full.implAttemptsUsed,
+                        max: full.implAttemptsLimit,
+                      },
+                    }
+                  : {}),
+              },
+            ];
           }),
+        );
+        return {
+          projects: projects.map(({ id, name }) => ({ id, name })),
+          runs: summaries.flat(),
         };
       },
       startTask(projectId, input) {
@@ -245,6 +287,39 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         return promise;
       },
       readRun,
+      async decide(runId, command) {
+        let snapshot = await readRun(runId);
+        if (!snapshot) return { status: 'notFound' };
+        if (
+          !isGate(snapshot.next) ||
+          (snapshot.status !== 'waiting' && snapshot.status !== 'stopped') ||
+          snapshot.waitId !== command.expectedWaitId ||
+          snapshot.waitDecided
+        ) {
+          return { status: 'conflict', snapshot };
+        }
+
+        const actionAllowed =
+          snapshot.next === 'gate0'
+            ? command.action === 'answer' || command.action === 'skip'
+            : snapshot.next === 'gate1'
+              ? command.action === 'approve' || command.action === 'reject' || command.action === 'cancel'
+              : snapshot.next === 'limit'
+                ? command.action === 'approve' || command.action === 'cancel'
+                : false;
+        if (!actionAllowed) return { status: 'invalid', message: 'Действие недопустимо для текущего ожидания' };
+        if (command.action === 'answer' && (!command.answers.length || command.answers.some(({ q, a }) => !q.trim() || !a.trim()))) {
+          return { status: 'invalid', message: 'Ответьте на каждый вопрос' };
+        }
+        if (command.action === 'reject' && !command.comment.trim()) {
+          return { status: 'invalid', message: 'Добавьте комментарий к возврату' };
+        }
+
+        const result = await runningCore.decideExpected(runId, command.expectedWaitId, command);
+        snapshot = await readRun(runId);
+        if (!snapshot) return { status: 'notFound' };
+        return { status: result.ok ? 'ok' : 'conflict', snapshot };
+      },
       close() {
         if (closing) return closing;
         hostClosing = true;

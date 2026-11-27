@@ -6,6 +6,7 @@ import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
 import type { Host, HostSnapshot, StartTaskResult } from './host.js';
+import type { ExpectedDecision } from './decisions.js';
 import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './session.js';
 import type { Sessions } from './session.js';
 
@@ -58,17 +59,21 @@ function overviewPage(snapshot: HostSnapshot): string {
         `<tr><td><a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a></td><td>${escapeHtml(run.projectId)}</td><td>${escapeHtml(run.status)}</td><td>${escapeHtml(run.next)}</td></tr>`,
     )
     .join('');
-  return `<h1>Проекты и прогоны</h1>${logoutForm()}<h2>Проекты</h2><ul>${projects}</ul><h2>Прогоны</h2><table><thead><tr><th>Прогон</th><th>Проект</th><th>Статус</th><th>Стадия</th></tr></thead><tbody>${runs}</tbody></table>`;
+  const waiting = snapshot.runs
+    .filter((run) => run.status === 'waiting' && run.gate)
+    .map((run) => `<li><a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a>: ${escapeHtml(run.reason ?? '')}</li>`)
+    .join('');
+  return `<h1>Проекты и прогоны</h1>${logoutForm()}<h2>Проекты</h2><ul>${projects}</ul><h2>Ожидают решения</h2><ul>${waiting}</ul><h2>Прогоны</h2><table><thead><tr><th>Прогон</th><th>Проект</th><th>Статус</th><th>Стадия</th></tr></thead><tbody>${runs}</tbody></table>`;
 }
 
 function projectPage(project: HostSnapshot['projects'][number], submissionId: string): string {
   return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<form method="post" action="/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
 }
 
-function runPage(snapshot: HostSnapshot, run: RunFile): string {
+function runPage(snapshot: HostSnapshot, run: RunFile, notice = ''): string {
   const listed = snapshot.runs.find((item) => item.id === run.id);
   const project = snapshot.projects.find((item) => item.id === listed?.projectId);
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd>${escapeHtml(run.status)}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd>${escapeHtml(run.status)}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
@@ -88,7 +93,27 @@ function sessionToken(req: IncomingMessage): string {
   return '';
 }
 
+function decisionFromForm(form: URLSearchParams): ExpectedDecision {
+  const answers = new Map<number, { q: string; a: string }>();
+  for (const [name, value] of form) {
+    const match = /^answers\[(\d+)\]\[(q|a)\]$/.exec(name);
+    if (!match) continue;
+    const index = Number(match[1]);
+    const answer = answers.get(index) ?? { q: '', a: '' };
+    if (match[2] === 'q') answer.q = value;
+    else answer.a = value;
+    answers.set(index, answer);
+  }
+  return {
+    expectedWaitId: form.get('expectedWaitId') ?? '',
+    action: form.get('action'),
+    comment: form.get('comment') ?? '',
+    answers: [...answers.entries()].sort(([a], [b]) => a - b).map(([, answer]) => answer),
+  } as ExpectedDecision;
+}
+
 const runRoute = /^\/runs\/([^/]+)$/;
+const runDecisionRoute = /^\/runs\/([^/]+)\/decision$/;
 const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
 const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
 const readMethods = ['GET'] as const;
@@ -102,7 +127,7 @@ registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
 
 function allowedMethods(route: string): readonly string[] | undefined {
   if (runRoute.test(route) || projectRoute.test(route)) return readMethods;
-  if (projectRunsRoute.test(route)) return ['POST'];
+  if (runDecisionRoute.test(route) || projectRunsRoute.test(route)) return ['POST'];
   return routeMethods.get(route);
 }
 
@@ -218,6 +243,29 @@ export function createServerApp(
         }
         if (result.status === 'notFound') send(res, 404, 'Проект не найден');
         else html(res, result.status === 'rejected' ? 400 : 409, startResultPage(result, projectId));
+        return;
+      }
+      const runDecisionMatch = runDecisionRoute.exec(route);
+      if (runDecisionMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const body = await readBody(req);
+        if (body.kind === 'bodyTooLarge' || body.kind === 'timeout') {
+          rejectBody(res, body.kind);
+          return;
+        }
+        if (body.kind === 'aborted') return;
+        const runId = runDecisionMatch[1]!;
+        const result = await host.decide(runId, decisionFromForm(new URLSearchParams(body.body)));
+        if (result.status === 'ok') {
+          res.writeHead(303, { Location: `/runs/${encodeURIComponent(runId)}` }).end();
+          return;
+        }
+        if (result.status === 'notFound') send(res, 404, 'Прогон не найден');
+        else if (result.status === 'invalid') send(res, 400, result.message);
+        else html(res, 409, runPage(await host.snapshot(), result.snapshot, 'Решение уже принято на другом устройстве'));
         return;
       }
       const runMatch = runRoute.exec(route);

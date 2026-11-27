@@ -225,6 +225,9 @@ test('обзор: название прогона с <script> выводится
     async startTask() {
       throw new Error('не реализовано');
     },
+    async decide() {
+      return { status: 'notFound' };
+    },
     async readRun() {
       return null;
     },
@@ -355,6 +358,9 @@ function stubHost(overrides: Partial<Host> = {}): Host {
     },
     async startTask() {
       throw new Error('не реализовано');
+    },
+    async decide() {
+      return { status: 'notFound' };
     },
     async readRun() {
       return null;

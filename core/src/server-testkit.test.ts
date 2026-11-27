@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AgentResult } from './agents/common.js';
+import { emptyUsage, type AgentResult } from './agents/common.js';
 import { loadLoginShellEnv, prependPath } from './env.js';
-import type { CoreSettings, RunFile } from './types.js';
+import type { CoreSettings, GateId, RunFile } from './types.js';
 import type { Orchestrator } from './orchestrator.js';
 import type { CoreOptions } from './runtime.js';
 import type { ServerProject } from './server/config.js';
 import { startHost, type Host } from './server/host.js';
+import { RunStore } from './store.js';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROMPTS = path.join(ROOT, 'core', 'prompts');
@@ -115,6 +116,43 @@ export async function untilGate(core: Orchestrator, runId: string, gate: string,
   }
 }
 
+export function waitingRunFixture(dataDir: string, projectPath: string, partial: Partial<RunFile> & { next: GateId }): RunFile {
+  const id = partial.id ?? crypto.randomUUID();
+  const startedAt = new Date().toISOString();
+  const run: RunFile = {
+    version: 2,
+    id,
+    changeId: `server-${id}`,
+    title: 'Ожидающий прогон',
+    task: 'Сделай задачу',
+    projectPath,
+    worktreePath: projectPath,
+    branch: 'main',
+    baseCommit: 'base',
+    testCommand: 'node --test',
+    mode: 'task',
+    workspace: 'worktree',
+    models: { planner: '', executor: '', reviewer: '' },
+    agents: { planner: 'claude', executor: 'claude', reviewer: 'claude' },
+    status: 'waiting',
+    waitId: crypto.randomUUID(),
+    attempts: [{ stage: partial.next, attempt: 1, status: 'running', startedAt }],
+    planRetries: 0,
+    implAttemptsUsed: 0,
+    implAttemptsLimit: 3,
+    tests: [],
+    reviews: [],
+    gates: [],
+    totals: emptyUsage(),
+    createdAt: startedAt,
+    updatedAt: startedAt,
+    ...partial,
+    next: partial.next,
+  };
+  new RunStore(dataDir).save(run);
+  return run;
+}
+
 export async function startTestHost(
   opts: {
     dataDir?: string;
@@ -123,7 +161,14 @@ export async function startTestHost(
     project?: Partial<ServerProject>;
     onCore?: (core: Orchestrator) => void;
   } = {},
-): Promise<{ host: Host; core: Orchestrator; dataDir: string; project: ServerProject; close: () => Promise<void> }> {
+): Promise<{
+  host: Host;
+  core: Orchestrator;
+  dataDir: string;
+  project: ServerProject;
+  settings: CoreSettings;
+  close: () => Promise<void>;
+}> {
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-bin-'));
   fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\necho "claude 1.0.0"\n', { mode: 0o755 });
   const settings: CoreSettings = {
@@ -163,5 +208,5 @@ export async function startTestHost(
     closing ??= host.close();
     return closing;
   };
-  return { host, core, dataDir, project, close };
+  return { host, core, dataDir, project, settings, close };
 }

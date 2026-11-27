@@ -10,6 +10,8 @@ export type ExpectedCommand =
   | { action: 'reject'; comment: string }
   | { action: 'cancel' };
 
+export type ExpectedDecision = ExpectedCommand & { expectedWaitId: string };
+
 export async function decideExpected(
   k: Kernel,
   runId: string,
