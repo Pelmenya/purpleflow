@@ -49,10 +49,7 @@ type QueueEntry = {
   lastError: string | null;
 };
 
-type DeliveryOutcome =
-  | { kind: 'delivered' }
-  | { kind: 'failed'; error: string }
-  | { kind: 'retry'; error: string; retryAfterMs?: number };
+type DeliveryOutcome = { kind: 'delivered' } | { kind: 'failed'; error: string } | { kind: 'retry'; error: string; retryAfterMs?: number };
 
 const REASONS: Record<string, string> = {
   gate0: 'Требуется уточнение',
@@ -154,7 +151,9 @@ export function startTelegram(options: TelegramOptions): TelegramHandle {
   };
 
   const applyIntent = (intent: AttentionIntent | null, runId: string, recoverFailed: boolean): boolean => {
-    const existing = intent ? queue.get(intent.key) : [...queue.values()].find((entry) => entry.runId === runId && entry.state === 'pending');
+    const existing = intent
+      ? queue.get(intent.key)
+      : [...queue.values()].find((entry) => entry.runId === runId && entry.state === 'pending');
     if (!intent) {
       if (!existing || existing.state !== 'pending') return false;
       existing.state = 'dropped';
@@ -199,6 +198,7 @@ export function startTelegram(options: TelegramOptions): TelegramHandle {
       }
     }
     save();
+    wake();
   };
 
   const unsubscribe = options.host.onIntentChange((runId, intent) => {
@@ -375,8 +375,7 @@ export function startTelegram(options: TelegramOptions): TelegramHandle {
     probes.add(controller);
     const promise = (async (): Promise<TelegramProbeResult> => {
       const outcome = await request('Пробное уведомление PurpleFlow', controller);
-      const result: TelegramProbeResult =
-        outcome.kind === 'delivered' ? { ok: true, error: null } : { ok: false, error: outcome.error };
+      const result: TelegramProbeResult = outcome.kind === 'delivered' ? { ok: true, error: null } : { ok: false, error: outcome.error };
       if (!stopping) {
         lastError = result.error;
         if (result.ok) lastDeliveredAt = now();

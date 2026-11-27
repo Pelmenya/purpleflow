@@ -55,6 +55,7 @@ export type SendChatResult =
   { status: 'accepted' } | { status: 'conflict' } | { status: 'unknown' } | { status: 'notFound' } | { status: 'invalid'; message: string };
 
 export interface Host {
+  readonly dataDir: string;
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   listChats(projectId: string): Promise<ChatSummary[] | null>;
@@ -333,6 +334,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
     };
     let closing: Promise<void> | undefined;
     return {
+      dataDir: realDataDir,
       async snapshot() {
         const runs = await runningCore.listRuns();
         const summaries = await Promise.all(
