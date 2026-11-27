@@ -1,5 +1,6 @@
 import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { stripAnsi } from '../agents/common.js';
 import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
 import type { ChangeDocs, DiffFile, RunFile } from '../types.js';
@@ -155,7 +156,9 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
     cancelled: 'Отменён',
     finished: 'Завершён',
   };
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
+  const message = run.message ? `<p data-run-message>${escapeHtml(run.message)}</p>` : '';
+  const logLink = `<p><a href="/runs/${encodeURIComponent(run.id)}/log">Журнал</a></p>`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
@@ -195,6 +198,7 @@ function decisionFromForm(form: URLSearchParams): ExpectedDecision {
 }
 
 const runRoute = /^\/runs\/([^/]+)$/;
+const runLogRoute = /^\/runs\/([^/]+)\/log$/;
 const runDecisionRoute = /^\/runs\/([^/]+)\/decision$/;
 const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
 const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
@@ -206,9 +210,10 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
   ['/logout', ['POST']],
 ]);
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
+registerReturnRoute(/^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i);
 
 function allowedMethods(route: string): readonly string[] | undefined {
-  if (runRoute.test(route) || projectRoute.test(route)) return readMethods;
+  if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route)) return readMethods;
   if (runDecisionRoute.test(route) || projectRunsRoute.test(route)) return ['POST'];
   return routeMethods.get(route);
 }
@@ -353,6 +358,13 @@ export function createServerApp(
             html(res, 409, runPage(await host.snapshot(), view.run, 'Решение уже принято на другом устройстве', view.docs, view.diff));
           else send(res, 404, 'Прогон не найден');
         }
+        return;
+      }
+      const runLogMatch = runLogRoute.exec(route);
+      if (runLogMatch && method === 'GET') {
+        const log = await host.readLog(runLogMatch[1]!);
+        if (log === null) send(res, 404, 'Прогон не найден');
+        else html(res, 200, `<h1>Журнал прогона</h1><pre>${escapeHtml(stripAnsi(log))}</pre>`);
         return;
       }
       const runMatch = runRoute.exec(route);

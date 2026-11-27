@@ -53,6 +53,7 @@ export interface Host {
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   readRun(id: string): Promise<RunFile | null>;
+  readLog(id: string): Promise<string | null>;
   readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
   readDiff(id: string): Promise<{ run: RunFile; diff: DiffFile[] | null } | null>;
   decide(runId: string, command: ExpectedDecision): Promise<DecideResult>;
@@ -289,6 +290,10 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         return promise;
       },
       readRun,
+      async readLog(id) {
+        if (!(await readRun(id))) return null;
+        return runningCore.getLog(id);
+      },
       async readChangeDocs(id) {
         const first = await readRun(id);
         if (!first) return null;

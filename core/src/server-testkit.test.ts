@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -349,4 +349,52 @@ export async function startTestHost(
     return closing;
   };
   return { host, core, dataDir, project, settings, close };
+}
+
+export async function spawnService(stand: ReturnType<typeof makeServerStand>): Promise<{
+  proc: ChildProcess;
+  origin: string;
+  stop: () => Promise<void>;
+}> {
+  const proc = spawn(process.execPath, [path.join(ROOT, 'core', 'dist', 'server', 'main.js'), '--config', stand.configFile], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const origin = 'http://127.0.0.1:43210';
+  let output = '';
+  proc.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+  proc.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+  const exited = once(proc, 'exit').then(() => undefined);
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`Служба завершилась при запуске:\n${output}`);
+    try {
+      const response = await fetch(`${origin}/login`, { signal: AbortSignal.timeout(1000) });
+      if (response.status === 200) break;
+    } catch {
+      // Служба ещё не слушает порт или восстанавливает прогоны.
+    }
+    if (Date.now() > deadline) {
+      proc.kill('SIGKILL');
+      await exited;
+      throw new Error(`Служба не открыла /login:\n${output}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  let stopping: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    stopping ??= (async () => {
+      if (proc.exitCode !== null || proc.signalCode !== null) return exited;
+      proc.kill('SIGTERM');
+      const timeout = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+      }, 10_000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+    return stopping;
+  };
+  return { proc, origin, stop };
 }
