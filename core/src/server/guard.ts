@@ -4,6 +4,7 @@ import { killAll, spawnScope } from '../proc.js';
 import type { CoreOptions } from '../runtime.js';
 import { trace } from '../trace.js';
 import { decideExpected, type ExpectedCommand } from './decisions.js';
+import { stopActive } from './stop.js';
 
 export const ACCEPTED_METHODS = [
   'dispatch',
@@ -21,6 +22,7 @@ export const ACCEPTED_METHODS = [
 export type ServerCore = Orchestrator & {
   shutdown(): Promise<void>;
   decideExpected(runId: string, expectedWaitId: string, command: ExpectedCommand): Promise<{ ok: true } | { ok: false; conflict: true }>;
+  stopActive(runId: string): Promise<{ ok: true } | { ok: false; conflict: true }>;
 };
 
 export function createServerCore(opts: CoreOptions): ServerCore {
@@ -74,6 +76,7 @@ export function createServerCore(opts: CoreOptions): ServerCore {
       if (prop === 'decideExpected')
         return (runId: string, expectedWaitId: string, command: ExpectedCommand) =>
           accepted(() => decideExpected(orchestrator.kernel, runId, expectedWaitId, command));
+      if (prop === 'stopActive') return (runId: string) => accepted(() => stopActive(orchestrator.kernel, runId));
       const value: unknown = Reflect.get(target, prop);
       if (typeof value !== 'function' || prop === 'constructor') return value;
       return (...args: unknown[]) => {
@@ -83,6 +86,11 @@ export function createServerCore(opts: CoreOptions): ServerCore {
             return orchestrator.kernel.withRunLock(cmd.runId, async () => {
               if (orchestrator.kernel.closing) throw new ShuttingDownError();
               if (orchestrator.kernel.store.load(cmd.runId!)?.waitDecided) throw new Error('Решение по этому ожиданию уже принято');
+              return value.apply(orchestrator, args) as unknown;
+            });
+          if (prop === 'dispatch' && cmd?.type === 'run.stop' && cmd.runId)
+            return orchestrator.kernel.withRunLock(cmd.runId, async () => {
+              if (orchestrator.kernel.closing) throw new ShuttingDownError();
               return value.apply(orchestrator, args) as unknown;
             });
           return value.apply(orchestrator, args) as unknown;

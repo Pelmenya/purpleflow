@@ -1,8 +1,10 @@
 import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { stripAnsi } from '../agents/common.js';
 import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
-import type { ChangeDocs, RunFile } from '../types.js';
+import type { ChangeDocs, ChatFile, ChatSummary, DiffFile, RunFile } from '../types.js';
+import { renderAcceptance } from './accept-page.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
@@ -30,11 +32,11 @@ function send(
   res.writeHead(status, { 'Content-Type': contentType, ...headers }).end(body);
 }
 
-function html(res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}): void {
+function html(res: ServerResponse, status: number, body: string, headers: Record<string, string> = {}, head = ''): void {
   send(
     res,
     status,
-    `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>PurpleFlow</title></head><body>${body}</body></html>`,
+    `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>PurpleFlow</title>${head}</head><body>${body}</body></html>`,
     'text/html; charset=utf-8',
     headers,
   );
@@ -68,14 +70,44 @@ function overviewPage(snapshot: HostSnapshot): string {
 }
 
 function projectPage(project: HostSnapshot['projects'][number], submissionId: string): string {
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<form method="post" action="/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<p><a href="/projects/${project.id}/chats">Чаты проекта</a></p><form method="post" action="/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
+}
+
+function chatListPage(project: HostSnapshot['projects'][number], chats: ChatSummary[]): string {
+  const items = chats
+    .map(
+      (chat) =>
+        `<li><a href="/chats/${encodeURIComponent(chat.id)}">${escapeHtml(chat.title)}</a>${chat.busy ? ' — ответ пишется' : ''}</li>`,
+    )
+    .join('');
+  return `<p><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></p><h1>Чаты проекта</h1>${logoutForm()}${items ? `<ul>${items}</ul>` : '<p>Чатов пока нет.</p>'}<form method="post" action="/projects/${project.id}/chats"><button type="submit">Создать чат</button></form>`;
+}
+
+function chatPage(view: { chat: ChatFile; busy: boolean }, submissionId: string, notice = ''): string {
+  const chat = view.chat;
+  const messages = chat.messages
+    .map((message) => {
+      const status = message.queued
+        ? ' — ожидает отправки'
+        : message.pending
+          ? ' — ответ пишется'
+          : message.stopped
+            ? ' — ответ остановлен'
+            : message.error
+              ? ` — ${escapeHtml(message.error)}`
+              : '';
+      return `<article data-message-id="${escapeHtml(message.id)}"><strong>${message.role === 'user' ? 'Владелец' : 'Ассистент'}${status}</strong><pre>${escapeHtml(message.text)}</pre></article>`;
+    })
+    .join('');
+  const action = `/chats/${encodeURIComponent(chat.id)}/messages`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(chat.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<section><h2>История</h2>${messages || '<p>Сообщений пока нет.</p>'}</section><form method="post" action="${action}"><fieldset${view.busy ? ' disabled' : ''}><input type="hidden" name="submissionId" value="${submissionId}"><label>Сообщение <textarea name="text" required></textarea></label><button type="submit">Отправить</button></fieldset></form>`;
 }
 
 function decisionForm(run: RunFile, action: string, label: string, fields = ''): string {
   return `<form method="post" action="/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(run.waitId ?? '')}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
 }
 
-function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined): string {
+function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined, diff: DiffFile[] | null | undefined): string {
   if (run.status !== 'waiting') return '';
   const reason = escapeHtml(gateMessage(run) ?? run.message ?? '');
   if (run.next === 'gate0') {
@@ -102,7 +134,11 @@ function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined): str
     const comment = '<label>Комментарий (необязательно) <textarea name="comment"></textarea></label>';
     return `<section><h2>${title}</h2><p>${reason}</p>${detail}${decisionForm(run, 'approve', 'Ещё попытка', comment)}${decisionForm(run, 'cancel', 'Остановить')}</section>`;
   }
-  if (run.next === 'gate2') return `<section><h2>Приёмка</h2><p>${reason}</p></section>`;
+  if (run.next === 'gate2') {
+    if (diff === null) return '<section><h2>Приёмка</h2><p>Дифф меняется — обновите страницу</p></section>';
+    if (diff === undefined) return '';
+    return renderAcceptance(run, diff, run.waitId ?? '');
+  }
   return '';
 }
 
@@ -124,13 +160,22 @@ function decisionHistory(run: RunFile): string {
   return `<section><h2>История решений</h2>${entries ? `<ol>${entries}</ol>` : '<p>Решений пока нет.</p>'}</section>`;
 }
 
-async function readRunView(host: Host, initial: RunFile): Promise<{ run: RunFile; docs: ChangeDocs | null | undefined } | null> {
-  if (initial.status !== 'waiting' || initial.next !== 'gate1') return { run: initial, docs: undefined };
-  const result = await host.readChangeDocs(initial.id);
-  return result ? { run: result.run, docs: result.docs } : null;
+async function readRunView(
+  host: Host,
+  initial: RunFile,
+): Promise<{ run: RunFile; docs: ChangeDocs | null | undefined; diff: DiffFile[] | null | undefined } | null> {
+  if (initial.status === 'waiting' && initial.next === 'gate1') {
+    const result = await host.readChangeDocs(initial.id);
+    return result ? { run: result.run, docs: result.docs, diff: undefined } : null;
+  }
+  if (initial.status === 'waiting' && initial.next === 'gate2') {
+    const result = await host.readDiff(initial.id);
+    return result ? { run: result.run, docs: undefined, diff: result.diff } : null;
+  }
+  return { run: initial, docs: undefined, diff: undefined };
 }
 
-function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: ChangeDocs | null): string {
+function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: ChangeDocs | null, diff?: DiffFile[] | null): string {
   const listed = snapshot.runs.find((item) => item.id === run.id);
   const project = snapshot.projects.find((item) => item.id === listed?.projectId);
   const statuses: Record<RunFile['status'], string> = {
@@ -141,7 +186,13 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
     cancelled: 'Отменён',
     finished: 'Завершён',
   };
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, docs)}${decisionHistory(run)}`;
+  const message = run.message ? `<p data-run-message>${escapeHtml(run.message)}</p>` : '';
+  const logLink = `<p><a href="/runs/${encodeURIComponent(run.id)}/log">Журнал</a></p>`;
+  const stopForm =
+    run.status === 'running' || run.status === 'queued'
+      ? `<form method="post" action="/runs/${encodeURIComponent(run.id)}/stop"><button type="submit">Остановить</button></form>`
+      : '';
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${stopForm}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
@@ -181,9 +232,15 @@ function decisionFromForm(form: URLSearchParams): ExpectedDecision {
 }
 
 const runRoute = /^\/runs\/([^/]+)$/;
+const runLogRoute = /^\/runs\/([^/]+)\/log$/;
+const runStopRoute = /^\/runs\/([^/]+)\/stop$/;
 const runDecisionRoute = /^\/runs\/([^/]+)\/decision$/;
 const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
 const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
+const projectChatsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/chats$/;
+const chatRoute = /^\/chats\/([A-Za-z0-9_-]+)$/;
+const chatApiRoute = /^\/api\/chats\/([A-Za-z0-9_-]+)$/;
+const chatMessagesRoute = /^\/chats\/([A-Za-z0-9_-]+)\/messages$/;
 const readMethods = ['GET'] as const;
 const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ['/', readMethods],
@@ -192,10 +249,16 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
   ['/logout', ['POST']],
 ]);
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
+registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+\/chats$/);
+registerReturnRoute(/^\/chats\/[A-Za-z0-9_-]+$/);
+registerReturnRoute(/^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i);
 
 function allowedMethods(route: string): readonly string[] | undefined {
-  if (runRoute.test(route) || projectRoute.test(route)) return readMethods;
-  if (runDecisionRoute.test(route) || projectRunsRoute.test(route)) return ['POST'];
+  if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route) || chatRoute.test(route) || chatApiRoute.test(route))
+    return readMethods;
+  if (projectChatsRoute.test(route)) return ['GET', 'POST'];
+  if (runStopRoute.test(route) || runDecisionRoute.test(route) || projectRunsRoute.test(route) || chatMessagesRoute.test(route))
+    return ['POST'];
   return routeMethods.get(route);
 }
 
@@ -205,7 +268,12 @@ export function createServerApp(
   opts: {
     now?: () => number;
     sessions?: Sessions;
-    testHooks?: { beforeStartTask?: () => Promise<void>; beforeStartRedirect?: () => Promise<void> };
+    testHooks?: {
+      beforeStartTask?: () => Promise<void>;
+      beforeStartRedirect?: () => Promise<void>;
+      beforeChatSend?: () => Promise<void>;
+      beforeChatRedirect?: () => Promise<void>;
+    };
   } = {},
 ): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
@@ -285,6 +353,75 @@ export function createServerApp(
         else send(res, 404, 'Проект не найден');
         return;
       }
+      const projectChatsMatch = projectChatsRoute.exec(route);
+      if (projectChatsMatch && method === 'GET') {
+        const projectId = projectChatsMatch[1]!;
+        const chats = await host.listChats(projectId);
+        const project = (await host.snapshot()).projects.find((item) => item.id === projectId);
+        if (chats && project) html(res, 200, chatListPage(project, chats));
+        else send(res, 404, 'Проект не найден');
+        return;
+      }
+      if (projectChatsMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const chat = await host.createChat(projectChatsMatch[1]!);
+        if (chat) res.writeHead(303, { Location: `/chats/${encodeURIComponent(chat.id)}` }).end();
+        else send(res, 404, 'Проект не найден');
+        return;
+      }
+      const chatApiMatch = chatApiRoute.exec(route);
+      if (chatApiMatch && method === 'GET') {
+        const view = await host.readChat(chatApiMatch[1]!);
+        if (view) send(res, 200, JSON.stringify(view), 'application/json; charset=utf-8');
+        else send(res, 404, 'Чат не найден');
+        return;
+      }
+      const chatMatch = chatRoute.exec(route);
+      if (chatMatch && method === 'GET') {
+        const view = await host.readChat(chatMatch[1]!);
+        if (view) html(res, 200, chatPage(view, crypto.randomUUID()), {}, view.busy ? '<meta http-equiv="refresh" content="2">' : '');
+        else send(res, 404, 'Чат не найден');
+        return;
+      }
+      const chatMessagesMatch = chatMessagesRoute.exec(route);
+      if (chatMessagesMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const body = await readBody(req);
+        if (body.kind === 'bodyTooLarge' || body.kind === 'timeout') {
+          rejectBody(res, body.kind);
+          return;
+        }
+        if (body.kind === 'aborted') return;
+        const form = new URLSearchParams(body.body);
+        const chatId = chatMessagesMatch[1]!;
+        await opts.testHooks?.beforeChatSend?.();
+        const result = await host.sendChat(chatId, form.get('text') ?? '', form.get('submissionId') ?? '');
+        if (result.status === 'accepted') {
+          await opts.testHooks?.beforeChatRedirect?.();
+          res.writeHead(303, { Location: `/chats/${encodeURIComponent(chatId)}` }).end();
+          return;
+        }
+        if (result.status === 'notFound') send(res, 404, 'Чат не найден');
+        else if (result.status === 'invalid') send(res, 400, result.message);
+        else if (result.status === 'unknown') {
+          html(
+            res,
+            409,
+            `<h1>Исход неизвестен</h1><p>Служба не записала исход предыдущей отправки. Повторный запуск не выполнялся.</p><p><a href="/chats/${encodeURIComponent(chatId)}">Открыть историю чата</a></p>`,
+          );
+        } else {
+          const view = await host.readChat(chatId);
+          if (view) html(res, 409, chatPage(view, crypto.randomUUID(), 'Этот идентификатор уже использован для другого сообщения'));
+          else send(res, 404, 'Чат не найден');
+        }
+        return;
+      }
       const projectRunsMatch = projectRunsRoute.exec(route);
       if (projectRunsMatch && method === 'POST') {
         if (!checkOrigin(req, config.publicOrigin)) {
@@ -313,6 +450,32 @@ export function createServerApp(
         else html(res, result.status === 'rejected' ? 400 : 409, startResultPage(result, projectId));
         return;
       }
+      const runStopMatch = runStopRoute.exec(route);
+      if (runStopMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const body = await readBody(req);
+        if (body.kind === 'bodyTooLarge' || body.kind === 'timeout') {
+          rejectBody(res, body.kind);
+          return;
+        }
+        if (body.kind === 'aborted') return;
+        const runId = runStopMatch[1]!;
+        const result = await host.stop(runId);
+        if (result.status === 'ok') {
+          res.writeHead(303, { Location: `/runs/${encodeURIComponent(runId)}` }).end();
+          return;
+        }
+        if (result.status === 'notFound') send(res, 404, 'Прогон не найден');
+        else {
+          const view = await readRunView(host, result.snapshot);
+          if (view) html(res, 409, runPage(await host.snapshot(), view.run, 'Прогон уже изменил состояние', view.docs, view.diff));
+          else send(res, 404, 'Прогон не найден');
+        }
+        return;
+      }
       const runDecisionMatch = runDecisionRoute.exec(route);
       if (runDecisionMatch && method === 'POST') {
         if (!checkOrigin(req, config.publicOrigin)) {
@@ -335,16 +498,24 @@ export function createServerApp(
         else if (result.status === 'invalid') send(res, 400, result.message);
         else {
           const view = await readRunView(host, result.snapshot);
-          if (view) html(res, 409, runPage(await host.snapshot(), view.run, 'Решение уже принято на другом устройстве', view.docs));
+          if (view)
+            html(res, 409, runPage(await host.snapshot(), view.run, 'Решение уже принято на другом устройстве', view.docs, view.diff));
           else send(res, 404, 'Прогон не найден');
         }
+        return;
+      }
+      const runLogMatch = runLogRoute.exec(route);
+      if (runLogMatch && method === 'GET') {
+        const log = await host.readLog(runLogMatch[1]!);
+        if (log === null) send(res, 404, 'Прогон не найден');
+        else html(res, 200, `<h1>Журнал прогона</h1><pre>${escapeHtml(stripAnsi(log))}</pre>`);
         return;
       }
       const runMatch = runRoute.exec(route);
       if (runMatch && method === 'GET') {
         const initial = await host.readRun(runMatch[1]!);
         const view = initial ? await readRunView(host, initial) : null;
-        if (view) html(res, 200, runPage(await host.snapshot(), view.run, '', view.docs));
+        if (view) html(res, 200, runPage(await host.snapshot(), view.run, '', view.docs, view.diff));
         else send(res, 404, 'Прогон не найден');
         return;
       }

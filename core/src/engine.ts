@@ -33,6 +33,9 @@ import { traced } from './trace.js';
 import type { AgentKind, Efforts, GateId, ReviewTarget, Role, RunFile, StartRunInput } from './types.js';
 import { DEFAULT_AGENTS, effortFor, enabledAgent } from './types.js';
 
+export const USER_STOP_MESSAGE = 'Остановлено пользователем';
+export const UNQUEUED_MESSAGE = 'Снят с очереди. «Продолжить» запустит его сразу.';
+
 function projectAllowed(k: Kernel, projectPath: string): boolean {
   try {
     return k.opts.allowProject?.(projectPath) ?? true;
@@ -267,12 +270,16 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
     await prepareWorkspace(k, run);
     if (k.closing) return run.id;
     if (k.stopping.delete(run.id)) {
-      k.markStopped(run, 'Остановлено пользователем');
+      k.markStopped(run, USER_STOP_MESSAGE);
       return run.id;
     }
   } catch (e) {
-    k.stopping.delete(run.id);
+    const stopped = k.stopping.delete(run.id);
     if (k.closing) return run.id;
+    if (stopped && k.opts.keepFailedStart) {
+      k.markStopped(run, USER_STOP_MESSAGE);
+      return run.id;
+    }
     // Рабочую копию создать не удалось (грязная копия, ветка уже есть…) — прогона нет, ошибка уходит в окно.
     k.store.forget(run.id);
     k.emit({ type: 'run.deleted', runId: run.id });
@@ -368,10 +375,10 @@ export async function launchQueued(k: Kernel, run: RunFile) {
     // Продолжение после перезапуска приложения: в режиме «ветка» проект могли переключить на другую ветку.
     else await ensureOnBranch(k, run);
     if (k.closing || k.deleted.has(run.id)) return;
-    if (k.stopping.delete(run.id)) return k.markStopped(run, 'Остановлено пользователем');
+    if (k.stopping.delete(run.id)) return k.markStopped(run, USER_STOP_MESSAGE);
   } catch (e) {
     if (k.closing || k.deleted.has(run.id)) return;
-    if (k.stopping.delete(run.id)) return k.markStopped(run, 'Остановлено пользователем');
+    if (k.stopping.delete(run.id)) return k.markStopped(run, USER_STOP_MESSAGE);
     run.status = 'stopped';
     run.message = `Не удалось начать прогон: ${(e as Error).message}`;
     k.save(run);
@@ -454,7 +461,7 @@ export async function stop(k: Kernel, id: string, { background = true }: { backg
     k.basePrep.delete(id);
     if (queued) {
       r.status = 'stopped';
-      r.message = 'Снят с очереди. «Продолжить» запустит его сразу.';
+      r.message = UNQUEUED_MESSAGE;
       k.save(r);
     }
     // Start every kill before awaiting any of them. The teardown guard prevents a new manager from joining these groups.
@@ -470,13 +477,14 @@ export async function stop(k: Kernel, id: string, { background = true }: { backg
       return;
     }
     if (active) return; // цикл drive (или launchQueued) сам зафиксирует остановку
-    if (r.status === 'running' || r.status === 'waiting') {
-      for (const a of r.attempts)
+    const fresh = k.store.load(id);
+    if (fresh && (fresh.status === 'running' || fresh.status === 'waiting') && !k.driving.has(id) && !k.preparing.has(id)) {
+      for (const a of fresh.attempts)
         if (a.stage === 'baseline' && a.status === 'running') Object.assign(a, { status: 'stopped', endedAt: new Date().toISOString() });
-      r.status = 'stopped';
-      r.message = 'Остановлено пользователем';
-      k.save(r);
-      k.emit({ type: 'run.finished', runId: id, status: 'stopped', message: r.message, reason: 'user_stop' });
+      fresh.status = 'stopped';
+      fresh.message = USER_STOP_MESSAGE;
+      k.save(fresh);
+      k.emit({ type: 'run.finished', runId: id, status: 'stopped', message: fresh.message, reason: 'user_stop' });
     }
   } finally {
     if (background) k.endBackgroundTeardown(id);
@@ -548,7 +556,6 @@ export async function drive(k: Kernel, run: RunFile) {
   if (k.closing || k.driving.has(run.id)) return;
   k.driving.add(run.id);
   k.live.set(run.id, run);
-  k.stopping.delete(run.id);
   // Продолжение старого прогона: файлов окружения в worktree могло ещё не быть.
   copyEnvFiles(k, run);
   try {
@@ -591,7 +598,7 @@ export async function drive(k: Kernel, run: RunFile) {
     if (k.deleted.has(run.id)) {
       // Delete owns the final event and data removal.
     } else if (e instanceof StopSignal || k.stopping.has(run.id)) {
-      k.markStopped(run, 'Остановлено пользователем');
+      k.markStopped(run, USER_STOP_MESSAGE);
     } else {
       k.fail(run, (e as Error).message || String(e));
     }

@@ -41,10 +41,12 @@ export async function prepareWorkspace(k: Kernel, run: RunFile) {
     });
   }
   if (run.mode !== 'quick' && run.mode !== 'review') {
-    await new OpenSpec(tools.openspec, k.opts.env).ensureInit(run.worktreePath, 'init').catch(async (e) => {
-      await undoWorkspace(git, run).catch(traced('prepareWorkspace: откат'));
-      throw e;
-    });
+    await new OpenSpec(tools.openspec, k.opts.env)
+      .ensureInit(run.worktreePath, k.opts.keepFailedStart ? run.id : 'init')
+      .catch(async (e) => {
+        await undoWorkspace(git, run).catch(traced('prepareWorkspace: откат'));
+        throw e;
+      });
     linkOpenspec(run);
   }
   run.workspacePending = undefined;

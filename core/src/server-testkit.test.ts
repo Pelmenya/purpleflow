@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -77,7 +77,7 @@ export class Browser {
   async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.cookie) headers.set('Cookie', this.cookie);
-    if ((init.method ?? 'GET').toUpperCase() === 'POST') headers.set('Origin', PUBLIC_ORIGIN);
+    if ((init.method ?? 'GET').toUpperCase() === 'POST' && !headers.has('Origin')) headers.set('Origin', PUBLIC_ORIGIN);
     const response = await fetch(`${origin}${route}`, { redirect: 'manual', ...init, headers });
     const cookie = response.headers.get('set-cookie');
     if (cookie) this.cookie = cookie.split(';', 1)[0] ?? '';
@@ -238,6 +238,61 @@ export function waitingRunFixture(dataDir: string, projectPath: string, partial:
   return run;
 }
 
+export function makeServerStand(opts: { testCommand?: string } = {}) {
+  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-server-')));
+  const root = path.join(sandbox, 'checkout');
+  const dataDir = path.join(sandbox, 'data');
+  const bin = path.join(sandbox, 'bin');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+
+  const delayFile = path.join(sandbox, 'delay-ms');
+  const fakeLog = path.join(sandbox, 'fake-claude.jsonl');
+  fs.writeFileSync(delayFile, '0');
+  const claude = path.join(bin, 'claude');
+  const fake = fileURLToPath(new URL('../../app/e2e/fake-claude.mjs', import.meta.url));
+  fs.writeFileSync(
+    claude,
+    `#!/bin/sh\nFAKE_CLAUDE_DELAY_MS="$(cat "${delayFile}")" FAKE_CLAUDE_LOG="${fakeLog}" exec "${process.execPath}" "${fake}" "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'server@example.test');
+  git('config', 'user.name', 'Server test');
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src/math.js'), 'export const add = (a, b) => a + b;\n');
+  fs.writeFileSync(path.join(root, 'package.json'), '{ "name": "server-stand", "type": "module" }\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Начало');
+
+  const project: ServerProject = { id: 'p1', path: root, testCommand: opts.testCommand ?? 'node --version' };
+  const secretFile = path.join(dataDir, 'secret');
+  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  const configFile = path.join(sandbox, 'server.json');
+  fs.writeFileSync(
+    configFile,
+    JSON.stringify({
+      dataDir,
+      promptsDir: PROMPTS,
+      projects: [project],
+      publicOrigin: PUBLIC_ORIGIN,
+      port: 43_210,
+      secretFile,
+      settings: {
+        toolPaths: { claude, openspec: path.join(ROOT, 'node_modules', '.bin', 'openspec') },
+        agents: { planner: 'claude', executor: 'claude', reviewer: 'claude' },
+        enabledAgents: ['claude'],
+        agentTimeoutMin: 1,
+        testTimeoutMin: 1,
+      },
+    }),
+  );
+  return { root, dataDir, configFile, project, delayFile, fakeLog };
+}
+
 export async function startTestHost(
   opts: {
     dataDir?: string;
@@ -294,4 +349,53 @@ export async function startTestHost(
     return closing;
   };
   return { host, core, dataDir, project, settings, close };
+}
+
+export async function spawnService(stand: ReturnType<typeof makeServerStand>): Promise<{
+  proc: ChildProcess;
+  origin: string;
+  stop: () => Promise<void>;
+}> {
+  const proc = spawn(process.execPath, [path.join(ROOT, 'core', 'dist', 'server', 'main.js'), '--config', stand.configFile], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const config = JSON.parse(fs.readFileSync(stand.configFile, 'utf8')) as ServerConfig;
+  const origin = `http://127.0.0.1:${config.port}`;
+  let output = '';
+  proc.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
+  proc.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));
+  const exited = once(proc, 'exit').then(() => undefined);
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    if (proc.exitCode !== null || proc.signalCode !== null) throw new Error(`Служба завершилась при запуске:\n${output}`);
+    try {
+      const response = await fetch(`${origin}/login`, { signal: AbortSignal.timeout(1000) });
+      if (response.status === 200) break;
+    } catch {
+      // Служба ещё не слушает порт или восстанавливает прогоны.
+    }
+    if (Date.now() > deadline) {
+      proc.kill('SIGKILL');
+      await exited;
+      throw new Error(`Служба не открыла /login:\n${output}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  let stopping: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    stopping ??= (async () => {
+      if (proc.exitCode !== null || proc.signalCode !== null) return exited;
+      proc.kill('SIGTERM');
+      const timeout = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) proc.kill('SIGKILL');
+      }, 10_000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(timeout);
+      }
+    })();
+    return stopping;
+  };
+  return { proc, origin, stop };
 }
