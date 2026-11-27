@@ -261,7 +261,7 @@ test('телеграм: огромный retry_after ограничен сутк
   const beforeStop = fs.readFileSync(queueFile(dataDir));
   const startedAt = Date.now();
   await handle.stop();
-  assert.ok(Date.now() - startedAt < 10_000);
+  assert.ok(Date.now() - startedAt < 2_000);
   assert.deepEqual(fs.readFileSync(queueFile(dataDir)), beforeStop);
 });
 
@@ -501,7 +501,7 @@ test('телеграм: stop отписывается и прерывает от
   const beforeStop = fs.readFileSync(queueFile(dataDir));
   const startedAt = Date.now();
   await handle.stop();
-  assert.ok(Date.now() - startedAt < 10_000);
+  assert.ok(Date.now() - startedAt < 2_000);
   assert.deepEqual(fs.readFileSync(queueFile(dataDir)), beforeStop);
   assert.equal(host.listenerCount(), 0);
   host.emit(intent('after-stop'));
@@ -558,7 +558,7 @@ test('телеграм: stop во время отсрочки', async (t) => {
   const beforeStop = fs.readFileSync(queueFile(dataDir));
   const startedAt = Date.now();
   await handle.stop();
-  assert.ok(Date.now() - startedAt < 10_000);
+  assert.ok(Date.now() - startedAt < 2_000);
   assert.deepEqual(fs.readFileSync(queueFile(dataDir)), beforeStop);
   await pause();
   assert.equal(bot.requests.length, 1);
