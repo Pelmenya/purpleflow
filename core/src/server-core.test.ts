@@ -10,6 +10,7 @@ import { opencodeMajor } from './agents/opencode.js';
 import { ShuttingDownError } from './kernel.js';
 import { Orchestrator } from './orchestrator.js';
 import { killAll, run as runProc, spawnScope } from './proc.js';
+import { createServerCore } from './server/guard.js';
 import { listAgyModels, listOpencodeModels } from './services/connection.js';
 import type { CoreEvent, CoreSettings, RunFile } from './types.js';
 
@@ -68,7 +69,7 @@ function setup(
   } as unknown as CoreSettings;
   const env = { ...process.env };
   const makeCore = () =>
-    new Orchestrator({
+    createServerCore({
       dataDir: path.join(root, 'data'),
       promptsDir: PROMPTS,
       env,

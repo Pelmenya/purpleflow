@@ -69,7 +69,6 @@ export class Kernel {
   /** Очередь прогонов сейчас разбирается. */
   pumping = false;
   closing = false;
-  pending = 0;
   engine!: EngineHooks;
 
   constructor(readonly opts: CoreOptions) {
