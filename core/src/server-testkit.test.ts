@@ -359,7 +359,8 @@ export async function spawnService(stand: ReturnType<typeof makeServerStand>): P
   const proc = spawn(process.execPath, [path.join(ROOT, 'core', 'dist', 'server', 'main.js'), '--config', stand.configFile], {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
-  const origin = 'http://127.0.0.1:43210';
+  const config = JSON.parse(fs.readFileSync(stand.configFile, 'utf8')) as ServerConfig;
+  const origin = `http://127.0.0.1:${config.port}`;
   let output = '';
   proc.stdout.on('data', (chunk: Buffer) => (output += chunk.toString()));
   proc.stderr.on('data', (chunk: Buffer) => (output += chunk.toString()));

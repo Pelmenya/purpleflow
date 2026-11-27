@@ -51,11 +51,7 @@ export type DecideResult =
   { status: 'ok' | 'conflict'; snapshot: RunFile } | { status: 'notFound' } | { status: 'invalid'; message: string };
 export type StopResult = { status: 'ok' } | { status: 'notFound' } | { status: 'conflict'; snapshot: RunFile };
 export type SendChatResult =
-  | { status: 'accepted' }
-  | { status: 'conflict' }
-  | { status: 'unknown' }
-  | { status: 'notFound' }
-  | { status: 'invalid'; message: string };
+  { status: 'accepted' } | { status: 'conflict' } | { status: 'unknown' } | { status: 'notFound' } | { status: 'invalid'; message: string };
 
 export interface Host {
   snapshot(): Promise<HostSnapshot>;
@@ -109,6 +105,15 @@ interface Submission {
   error?: string;
 }
 
+interface ChatSubmission {
+  submissionId: string;
+  hash: string;
+  chatId: string;
+  createdAt: string;
+  accepted?: boolean;
+  error?: string;
+}
+
 const submissionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function startHost(opts: StartHostOptions): Promise<Host> {
@@ -145,6 +150,23 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         return false;
       }
     };
+
+    const store = new RunStore(realDataDir);
+    let chatFiles: string[] = [];
+    try {
+      chatFiles = fs.readdirSync(path.join(realDataDir, 'chats')).filter((file) => file.endsWith('.json'));
+    } catch {
+      chatFiles = [];
+    }
+    for (const file of chatFiles) {
+      const id = file.slice(0, -5);
+      for (const group of [`chat:${id}`, `chat:${id}:task`]) {
+        const pids = store.readPids(group);
+        const recordedAt = store.pidsTime(group);
+        for (const pid of pids) await killPid(pid, recordedAt);
+        store.writePids(group, []);
+      }
+    }
 
     core = createServerCore({
       dataDir: realDataDir,
@@ -238,7 +260,45 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       }
     };
 
+    const chatSubmissionsDir = path.join(realDataDir, 'server', 'chat-submissions');
+    const chatSubmissionFile = (submissionId: string): string => path.join(chatSubmissionsDir, `${submissionId}.json`);
+    const saveChatSubmission = (submission: ChatSubmission): void => {
+      writeAtomic(chatSubmissionFile(submission.submissionId), JSON.stringify(submission, null, 2) + '\n');
+    };
+    const readChatSubmission = async (submissionId: string): Promise<ChatSubmission | undefined> => {
+      try {
+        return JSON.parse(await fs.promises.readFile(chatSubmissionFile(submissionId), 'utf8')) as ChatSubmission;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    };
+    const performChatSend = async (chatId: string, text: string, submissionId: string, hash: string): Promise<SendChatResult> => {
+      if (!(await readChat(chatId))) return { status: 'notFound' };
+      const existing = await readChatSubmission(submissionId);
+      if (existing) {
+        if (existing.hash !== hash) return { status: 'conflict' };
+        if (existing.accepted) return { status: 'accepted' };
+        if (existing.error !== undefined) return { status: 'invalid', message: existing.error };
+        return { status: 'unknown' };
+      }
+
+      const submission: ChatSubmission = { submissionId, hash, chatId, createdAt: new Date().toISOString() };
+      saveChatSubmission(submission);
+      try {
+        await runningCore.sendChat(chatId, text);
+        saveChatSubmission({ ...submission, accepted: true });
+        return { status: 'accepted' };
+      } catch (error) {
+        if (error instanceof ShuttingDownError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        saveChatSubmission({ ...submission, error: message });
+        return { status: 'invalid', message };
+      }
+    };
+
     const inFlight = new Map<string, { hash: string; promise: Promise<StartTaskResult> }>();
+    const chatInFlight = new Map<string, { hash: string; promise: Promise<SendChatResult> }>();
     let hostClosing = false;
     let activeOperations = 0;
     let notifyOperationsIdle: (() => void) | undefined;
@@ -350,19 +410,25 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         })();
       },
       readChat,
-      async sendChat(chatId, text, submissionId) {
+      sendChat(chatId, text, submissionId) {
         if (hostClosing) throw new ShuttingDownError();
         const message = text.trim();
-        if (!message) return { status: 'invalid', message: 'Введите сообщение' };
-        if (!submissionIdPattern.test(submissionId)) return { status: 'invalid', message: 'Некорректный идентификатор отправки' };
-        operationStarted();
-        try {
-          if (!(await readChat(chatId))) return { status: 'notFound' };
-          await runningCore.sendChat(chatId, message);
-          return { status: 'accepted' };
-        } finally {
-          operationFinished();
+        if (!message) return Promise.resolve({ status: 'invalid', message: 'Введите сообщение' });
+        if (!submissionIdPattern.test(submissionId)) {
+          return Promise.resolve({ status: 'invalid', message: 'Некорректный идентификатор отправки' });
         }
+        const hash = createHash('sha256')
+          .update(JSON.stringify([chatId, message]))
+          .digest('hex');
+        const existing = chatInFlight.get(submissionId);
+        if (existing) return existing.hash === hash ? existing.promise : Promise.resolve({ status: 'conflict' });
+        operationStarted();
+        const promise = performChatSend(chatId, message, submissionId, hash).finally(() => {
+          if (chatInFlight.get(submissionId)?.promise === promise) chatInFlight.delete(submissionId);
+          operationFinished();
+        });
+        chatInFlight.set(submissionId, { hash, promise });
+        return promise;
       },
       readRun,
       async readLog(id) {

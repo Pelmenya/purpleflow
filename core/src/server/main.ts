@@ -382,14 +382,7 @@ export function createServerApp(
       const chatMatch = chatRoute.exec(route);
       if (chatMatch && method === 'GET') {
         const view = await host.readChat(chatMatch[1]!);
-        if (view)
-          html(
-            res,
-            200,
-            chatPage(view, crypto.randomUUID()),
-            {},
-            view.busy ? '<meta http-equiv="refresh" content="2">' : '',
-          );
+        if (view) html(res, 200, chatPage(view, crypto.randomUUID()), {}, view.busy ? '<meta http-equiv="refresh" content="2">' : '');
         else send(res, 404, 'Чат не найден');
         return;
       }
