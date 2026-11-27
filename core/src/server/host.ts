@@ -8,7 +8,7 @@ import type { Orchestrator } from '../orchestrator.js';
 import type { CoreOptions, Listener } from '../runtime.js';
 import { isGate } from '../stage-info.js';
 import { writeAtomic } from '../store.js';
-import type { CoreSettings, GateId, RunFile, RunStatus, StageId } from '../types.js';
+import type { ChangeDocs, CoreSettings, GateId, RunFile, RunStatus, StageId } from '../types.js';
 import type { ServerProject } from './config.js';
 import type { ExpectedDecision } from './decisions.js';
 import { createServerCore, type ServerCore } from './guard.js';
@@ -53,6 +53,7 @@ export interface Host {
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   readRun(id: string): Promise<RunFile | null>;
+  readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
   decide(runId: string, command: ExpectedDecision): Promise<DecideResult>;
   close(): Promise<void>;
 }
@@ -287,6 +288,21 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         return promise;
       },
       readRun,
+      async readChangeDocs(id) {
+        const first = await readRun(id);
+        if (!first) return null;
+        let previous = first;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const docs = await runningCore.getChangeDocs(id);
+          const current = await readRun(id);
+          if (!current) return null;
+          if (current.status === previous.status && current.next === previous.next && current.waitId === previous.waitId) {
+            return { run: current, docs };
+          }
+          previous = current;
+        }
+        return { run: previous, docs: null };
+      },
       async decide(runId, command) {
         let snapshot = await readRun(runId);
         if (!snapshot) return { status: 'notFound' };
