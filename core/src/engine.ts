@@ -282,7 +282,11 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
       k.markStopped(run, USER_STOP_MESSAGE);
       return run.id;
     }
-    // Рабочую копию создать не удалось (грязная копия, ветка уже есть…) — прогона нет, ошибка уходит в окно.
+    if (k.opts.keepFailedStart) {
+      k.markStopped(run, `Не удалось начать прогон: ${(e as Error).message || String(e)}`, 'start_failed');
+      return run.id;
+    }
+    // Без keepFailedStart рабочая копия не создалась — прогона нет, ошибка уходит в окно.
     k.store.forget(run.id);
     k.emit({ type: 'run.deleted', runId: run.id });
     throw e;

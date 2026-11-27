@@ -243,6 +243,12 @@ test('обзор: название прогона с <script> выводится
     async readRun() {
       return null;
     },
+    intents() {
+      return [];
+    },
+    onIntentChange() {
+      return () => {};
+    },
     async readLog() {
       return null;
     },
@@ -400,6 +406,12 @@ function stubHost(overrides: Partial<Host> = {}): Host {
     },
     async readRun() {
       return null;
+    },
+    intents() {
+      return [];
+    },
+    onIntentChange() {
+      return () => {};
     },
     async readLog() {
       return null;

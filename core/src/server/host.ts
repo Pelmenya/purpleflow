@@ -10,6 +10,7 @@ import type { CoreOptions, Listener } from '../runtime.js';
 import { isGate } from '../stage-info.js';
 import { RunStore, writeAtomic } from '../store.js';
 import type { ChangeDocs, ChatFile, ChatSummary, CoreSettings, DiffFile, GateId, RunFile, RunStatus, StageId } from '../types.js';
+import { attentionIntent, type AttentionIntent } from './attention.js';
 import type { ServerProject } from './config.js';
 import type { ExpectedDecision } from './decisions.js';
 import { createServerCore, type ServerCore } from './guard.js';
@@ -61,6 +62,8 @@ export interface Host {
   readChat(chatId: string): Promise<{ chat: ChatFile; busy: boolean } | null>;
   sendChat(chatId: string, text: string, submissionId: string): Promise<SendChatResult>;
   readRun(id: string): Promise<RunFile | null>;
+  intents(): AttentionIntent[];
+  onIntentChange(fn: (runId: string, intent: AttentionIntent | null) => void): () => void;
   readLog(id: string): Promise<string | null>;
   readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
   readDiff(id: string): Promise<{ run: RunFile; diff: DiffFile[] | null } | null>;
@@ -177,18 +180,34 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       keepFailedStart: true,
       runners: opts.runners,
     });
+    const runningCore = core;
+    const readAllowedRun = (id: string): RunFile | null => {
+      const run = runningCore.kernel.store.load(id);
+      return run && allowProject(run.projectPath) ? run : null;
+    };
+    const readRun = async (id: string): Promise<RunFile | null> => readAllowedRun(id);
+    const intentListeners = new Set<{
+      fn: (runId: string, intent: AttentionIntent | null) => void;
+      keys: Map<string, string | null>;
+    }>();
+    core.on((event) => {
+      if (event.type !== 'run.updated' || !allowProject(event.run.projectPath)) return;
+      const intent = attentionIntent(event.run);
+      const key = intent?.key ?? null;
+      for (const listener of intentListeners) {
+        const seen = listener.keys.has(event.run.id);
+        if (seen && listener.keys.get(event.run.id) === key) continue;
+        listener.keys.set(event.run.id, key);
+        if (seen || intent) listener.fn(event.run.id, intent);
+      }
+    });
     if (opts.onEvent) core.on(opts.onEvent);
     opts.onCore?.(core);
     await core.recover();
-    const runningCore = core;
     const submissionsDir = path.join(realDataDir, 'server', 'submissions');
     const submissionFile = (submissionId: string) => path.join(submissionsDir, `${submissionId}.json`);
     const saveSubmission = (submission: Submission): void => {
       writeAtomic(submissionFile(submission.submissionId), JSON.stringify(submission, null, 2) + '\n');
-    };
-    const readRun = async (id: string): Promise<RunFile | null> => {
-      const run = await runningCore.getRun(id);
-      return run && allowProject(run.projectPath) ? run : null;
     };
     const readChat = async (id: string): Promise<{ chat: ChatFile; busy: boolean } | null> => {
       const result = await runningCore.getChat(id);
@@ -431,6 +450,25 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         return promise;
       },
       readRun,
+      intents() {
+        const intents: AttentionIntent[] = [];
+        for (const summary of runningCore.kernel.store.list()) {
+          const run = readAllowedRun(summary.id);
+          const intent = run ? attentionIntent(run) : null;
+          if (intent) intents.push(intent);
+        }
+        return intents;
+      },
+      onIntentChange(fn) {
+        const listener = { fn, keys: new Map<string, string | null>() };
+        intentListeners.add(listener);
+        let subscribed = true;
+        return () => {
+          if (!subscribed) return;
+          subscribed = false;
+          intentListeners.delete(listener);
+        };
+      },
       async readLog(id) {
         if (!(await readRun(id))) return null;
         return runningCore.getLog(id);
