@@ -1,10 +1,12 @@
 import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { ShuttingDownError } from '../kernel.js';
+import type { RunFile } from '../types.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
-import type { Host, HostSnapshot } from './host.js';
-import { checkOrigin, createSessions, isReturnRoute, readBody, rejectBody } from './session.js';
+import type { Host, HostSnapshot, StartTaskResult } from './host.js';
+import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './session.js';
 import type { Sessions } from './session.js';
 
 export interface Service {
@@ -46,7 +48,10 @@ function logoutForm(): string {
 
 function overviewPage(snapshot: HostSnapshot): string {
   const projects = snapshot.projects
-    .map((project) => `<li data-project-id="${escapeHtml(project.id)}">${escapeHtml(project.name)}</li>`)
+    .map(
+      (project) =>
+        `<li data-project-id="${escapeHtml(project.id)}"><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
+    )
     .join('');
   const runs = snapshot.runs
     .map(
@@ -57,11 +62,22 @@ function overviewPage(snapshot: HostSnapshot): string {
   return `<h1>Проекты и прогоны</h1>${logoutForm()}<h2>Проекты</h2><ul>${projects}</ul><h2>Прогоны</h2><table><thead><tr><th>Прогон</th><th>Проект</th><th>Статус</th><th>Стадия</th></tr></thead><tbody>${runs}</tbody></table>`;
 }
 
-function runPage(snapshot: HostSnapshot, id: string): string | undefined {
-  const run = snapshot.runs.find((item) => item.id === id);
-  if (!run) return undefined;
-  const project = snapshot.projects.find((item) => item.id === run.projectId);
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${logoutForm()}<dl><dt>Проект</dt><dd>${escapeHtml(project?.name ?? run.projectId)}</dd><dt>Статус</dt><dd>${escapeHtml(run.status)}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>`;
+function projectPage(project: HostSnapshot['projects'][number], submissionId: string): string {
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<form method="post" action="/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
+}
+
+function runPage(snapshot: HostSnapshot, run: RunFile): string {
+  const listed = snapshot.runs.find((item) => item.id === run.id);
+  const project = snapshot.projects.find((item) => item.id === listed?.projectId);
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd>${escapeHtml(run.status)}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>`;
+}
+
+function startResultPage(result: StartTaskResult, projectId: string): string {
+  if (result.status === 'rejected') {
+    return `<h1>Задача не запущена</h1><p>${escapeHtml(result.message)}</p><p><a href="/projects/${projectId}">Вернуться к задаче</a></p>`;
+  }
+  const message = result.status === 'conflict' ? 'Этот идентификатор уже использован для другой задачи' : 'Исход предыдущего запуска неизвестен';
+  return `<h1>Задача не запущена повторно</h1><p>${message}</p><p><a href="/">Проверьте список прогонов</a></p>`;
 }
 
 function sessionToken(req: IncomingMessage): string {
@@ -73,6 +89,8 @@ function sessionToken(req: IncomingMessage): string {
 }
 
 const runRoute = /^\/runs\/([^/]+)$/;
+const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
+const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
 const readMethods = ['GET'] as const;
 const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ['/', readMethods],
@@ -80,12 +98,23 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
   ['/login', ['GET', 'POST']],
   ['/logout', ['POST']],
 ]);
+registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
 
 function allowedMethods(route: string): readonly string[] | undefined {
-  return runRoute.test(route) ? readMethods : routeMethods.get(route);
+  if (runRoute.test(route) || projectRoute.test(route)) return readMethods;
+  if (projectRunsRoute.test(route)) return ['POST'];
+  return routeMethods.get(route);
 }
 
-export function createServerApp(config: ServerConfig, host: Host, opts: { now?: () => number; sessions?: Sessions } = {}): RequestListener {
+export function createServerApp(
+  config: ServerConfig,
+  host: Host,
+  opts: {
+    now?: () => number;
+    sessions?: Sessions;
+    testHooks?: { beforeStartTask?: () => Promise<void>; beforeStartRedirect?: () => Promise<void> };
+  } = {},
+): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -156,11 +185,46 @@ export function createServerApp(config: ServerConfig, host: Host, opts: { now?: 
         send(res, 200, JSON.stringify(await host.snapshot()), 'application/json; charset=utf-8');
         return;
       }
+      const projectMatch = projectRoute.exec(route);
+      if (projectMatch && method === 'GET') {
+        const project = (await host.snapshot()).projects.find((item) => item.id === projectMatch[1]);
+        if (project) html(res, 200, projectPage(project, crypto.randomUUID()));
+        else send(res, 404, 'Проект не найден');
+        return;
+      }
+      const projectRunsMatch = projectRunsRoute.exec(route);
+      if (projectRunsMatch && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        const body = await readBody(req);
+        if (body.kind === 'bodyTooLarge' || body.kind === 'timeout') {
+          rejectBody(res, body.kind);
+          return;
+        }
+        if (body.kind === 'aborted') return;
+        await opts.testHooks?.beforeStartTask?.();
+        const form = new URLSearchParams(body.body);
+        const projectId = projectRunsMatch[1]!;
+        const result = await host.startTask(projectId, {
+          task: form.get('task') ?? '',
+          submissionId: form.get('submissionId') ?? '',
+        });
+        if (result.status === 'started') {
+          await opts.testHooks?.beforeStartRedirect?.();
+          res.writeHead(303, { Location: `/runs/${encodeURIComponent(result.runId)}` }).end();
+          return;
+        }
+        if (result.status === 'notFound') send(res, 404, 'Проект не найден');
+        else html(res, result.status === 'rejected' ? 400 : 409, startResultPage(result, projectId));
+        return;
+      }
       const runMatch = runRoute.exec(route);
       if (runMatch && method === 'GET') {
-        const page = runPage(await host.snapshot(), runMatch[1]!);
-        if (page === undefined) send(res, 404, 'Прогон не найден');
-        else html(res, 200, page);
+        const run = await host.readRun(runMatch[1]!);
+        if (run === null) send(res, 404, 'Прогон не найден');
+        else html(res, 200, runPage(await host.snapshot(), run));
         return;
       }
       send(
@@ -170,8 +234,8 @@ export function createServerApp(config: ServerConfig, host: Host, opts: { now?: 
         'text/plain; charset=utf-8',
         methods ? { Allow: methods.join(', ') } : {},
       );
-    } catch {
-      if (!res.headersSent) send(res, 500, 'Внутренняя ошибка');
+    } catch (error) {
+      if (!res.headersSent) send(res, error instanceof ShuttingDownError ? 503 : 500, error instanceof ShuttingDownError ? 'Служба останавливается' : 'Внутренняя ошибка');
       else res.destroy();
     }
   };

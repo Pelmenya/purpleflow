@@ -2,18 +2,31 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
-import type { CoreSettings, RunStatus, StageId } from '../types.js';
-import type { Listener } from '../runtime.js';
+import { ShuttingDownError } from '../kernel.js';
+import type { Orchestrator } from '../orchestrator.js';
+import type { CoreOptions, Listener } from '../runtime.js';
+import { writeAtomic } from '../store.js';
+import type { CoreSettings, RunFile, RunStatus, StageId } from '../types.js';
+import type { ServerProject } from './config.js';
 import { createServerCore, type ServerCore } from './guard.js';
 
 export interface StartHostOptions {
   dataDir: string;
   promptsDir: string;
-  projects: { id: string; path: string }[];
+  projects: ServerProject[];
   settings: CoreSettings;
   agentEnv: NodeJS.ProcessEnv;
   onEvent?: Listener;
+  runners?: CoreOptions['runners'];
+  onCore?: (core: Orchestrator) => void;
 }
+
+export type StartTaskResult =
+  | { status: 'started'; runId: string }
+  | { status: 'conflict' }
+  | { status: 'unknown' }
+  | { status: 'notFound' }
+  | { status: 'rejected'; message: string };
 
 export interface HostSnapshot {
   projects: { id: string; name: string }[];
@@ -22,6 +35,8 @@ export interface HostSnapshot {
 
 export interface Host {
   snapshot(): Promise<HostSnapshot>;
+  startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
+  readRun(id: string): Promise<RunFile | null>;
   close(): Promise<void>;
 }
 
@@ -52,6 +67,17 @@ function closeServer(server: net.Server): Promise<void> {
   });
 }
 
+interface Submission {
+  submissionId: string;
+  hash: string;
+  projectId: string;
+  createdAt: string;
+  runId?: string;
+  error?: string;
+}
+
+const submissionIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function startHost(opts: StartHostOptions): Promise<Host> {
   if (process.platform !== 'linux') throw new Error('Серверный хост поддерживается только на Linux');
 
@@ -75,8 +101,9 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       const realPath = fs.realpathSync(project.path);
       if (paths.has(realPath)) throw new Error(`Проекты ссылаются на один каталог: ${project.id}`);
       paths.add(realPath);
-      return { id: project.id, path: realPath, name: path.basename(realPath) };
+      return { ...project, path: realPath, name: path.basename(realPath) };
     });
+    const projectById = new Map(projects.map((project) => [project.id, project]));
     const projectByPath = new Map(projects.map((project) => [project.path, project]));
     const allowProject = (projectPath: string): boolean => {
       try {
@@ -92,11 +119,95 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       env: opts.agentEnv,
       getSettings: () => opts.settings,
       allowProject,
+      runners: opts.runners,
     });
     if (opts.onEvent) core.on(opts.onEvent);
+    opts.onCore?.(core);
     await core.recover();
     const runningCore = core;
+    const submissionsDir = path.join(realDataDir, 'server', 'submissions');
+    const submissionFile = (submissionId: string) => path.join(submissionsDir, `${submissionId}.json`);
+    const saveSubmission = (submission: Submission): void => {
+      writeAtomic(submissionFile(submission.submissionId), JSON.stringify(submission, null, 2) + '\n');
+    };
+    const readRun = async (id: string): Promise<RunFile | null> => {
+      const run = await runningCore.getRun(id);
+      return run && allowProject(run.projectPath) ? run : null;
+    };
+    const readSubmission = async (submissionId: string): Promise<Submission | undefined> => {
+      try {
+        return JSON.parse(await fs.promises.readFile(submissionFile(submissionId), 'utf8')) as Submission;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+        throw error;
+      }
+    };
+    const performStartTask = async (
+      projectId: string,
+      task: string,
+      submissionId: string,
+      hash: string,
+    ): Promise<StartTaskResult> => {
+      const existing = await readSubmission(submissionId);
+      if (existing) {
+        if (existing.hash !== hash) return { status: 'conflict' };
+        if (existing.runId !== undefined) {
+          const run = await readRun(existing.runId);
+          return run ? { status: 'started', runId: existing.runId } : { status: 'unknown' };
+        }
+        if (existing.error !== undefined) return { status: 'rejected', message: existing.error };
+        return { status: 'unknown' };
+      }
 
+      const project = projectById.get(projectId);
+      if (!project) return { status: 'notFound' };
+      const savedConfig = await runningCore.getProjectConfig(project.path);
+      const testCommand = (project.testCommand ?? savedConfig?.testCommand ?? '').trim();
+      const submission: Submission = {
+        submissionId,
+        hash,
+        projectId,
+        createdAt: new Date().toISOString(),
+      };
+      if (!testCommand) {
+        const message = 'Для проекта не задана команда тестов';
+        saveSubmission({ ...submission, error: message });
+        return { status: 'rejected', message };
+      }
+      if (savedConfig?.multiRepo) {
+        const message = 'Серверный запуск не поддерживает проект из нескольких репозиториев';
+        saveSubmission({ ...submission, error: message });
+        return { status: 'rejected', message };
+      }
+
+      saveSubmission(submission);
+      try {
+        const { runId } = await runningCore.dispatch({
+          type: 'run.start',
+          input: {
+            projectPath: project.path,
+            task,
+            testCommand,
+            setupCommand: project.setupCommand ?? savedConfig?.setupCommand,
+            lintCommand: project.lintCommand ?? savedConfig?.lintCommand,
+            mode: 'task',
+            workspace: 'worktree',
+          },
+        });
+        saveSubmission({ ...submission, runId });
+        return { status: 'started', runId };
+      } catch (error) {
+        if (error instanceof ShuttingDownError) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        saveSubmission({ ...submission, error: message });
+        return { status: 'rejected', message };
+      }
+    };
+
+    const inFlight = new Map<string, { hash: string; promise: Promise<StartTaskResult> }>();
+    let hostClosing = false;
+    let activeStartTasks = 0;
+    let notifyStartTasksIdle: (() => void) | undefined;
     let closing: Promise<void> | undefined;
     return {
       async snapshot() {
@@ -115,10 +226,40 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
           }),
         };
       },
+      startTask(projectId, input) {
+        if (hostClosing) throw new ShuttingDownError();
+        const task = input.task.trim();
+        const submissionId = input.submissionId;
+        if (!task) return Promise.resolve({ status: 'rejected', message: 'Опишите задачу' });
+        if (!submissionIdPattern.test(submissionId)) {
+          return Promise.resolve({ status: 'rejected', message: 'Некорректный идентификатор отправки' });
+        }
+        const hash = createHash('sha256').update(JSON.stringify({ projectId, task })).digest('hex');
+        const existing = inFlight.get(submissionId);
+        if (existing) return existing.hash === hash ? existing.promise : Promise.resolve({ status: 'conflict' });
+        activeStartTasks++;
+        const promise = performStartTask(projectId, task, submissionId, hash).finally(() => {
+          activeStartTasks--;
+          if (inFlight.get(submissionId)?.promise === promise) inFlight.delete(submissionId);
+          if (activeStartTasks === 0) {
+            notifyStartTasksIdle?.();
+            notifyStartTasksIdle = undefined;
+          }
+        });
+        inFlight.set(submissionId, { hash, promise });
+        return promise;
+      },
+      readRun,
       close() {
-        closing ??= (async () => {
+        if (closing) return closing;
+        hostClosing = true;
+        const stopping = runningCore.shutdown();
+        closing = (async () => {
           try {
-            await runningCore.shutdown();
+            if (activeStartTasks > 0) {
+              await new Promise<void>((resolve) => (notifyStartTasksIdle = resolve));
+            }
+            await stopping;
           } finally {
             await closeServer(server);
           }
