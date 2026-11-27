@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { emptyUsage, type AgentResult, type AgentRunOptions } from './agents/common.js';
 import { opencodeMajor } from './agents/opencode.js';
 import { ShuttingDownError } from './kernel.js';
-import { Orchestrator } from './orchestrator.js';
+import type { Orchestrator } from './orchestrator.js';
 import { killAll, run as runProc, spawnScope } from './proc.js';
 import { createServerCore } from './server/guard.js';
 import { listAgyModels, listOpencodeModels } from './services/connection.js';
