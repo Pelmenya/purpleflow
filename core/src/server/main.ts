@@ -263,7 +263,6 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+\/chats$/);
 registerReturnRoute(/^\/chats\/[A-Za-z0-9_-]+$/);
-registerReturnRoute(/^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i);
 registerReturnRoute(/^\/settings$/);
 
 function allowedMethods(route: string): readonly string[] | undefined {

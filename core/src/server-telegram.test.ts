@@ -155,6 +155,34 @@ async function waitFor(check: () => boolean, message: string, timeoutMs = 2_000)
 
 const pause = (ms = 50): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+test('телеграм: attentionLink строит обе ссылки при изолированном импорте', async () => {
+  const moduleUrl = new URL('./server/telegram.ts', import.meta.url).href;
+  const source = `
+    import { attentionLink } from ${JSON.stringify(moduleUrl)};
+    const base = { runId: ${JSON.stringify(runId)}, reasonCode: 'gate1' };
+    console.log(JSON.stringify([
+      attentionLink('https://purpleflow.example', { ...base, key: 'wait', kind: 'wait' }),
+      attentionLink('https://purpleflow.example', { ...base, key: 'stopped', kind: 'stopped' }),
+    ]));
+  `;
+  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', source], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => (stdout += chunk));
+  child.stderr.on('data', (chunk: string) => (stderr += chunk));
+  const [code, signal] = await within(once(child, 'exit'));
+  assert.equal(code, 0, stderr);
+  assert.equal(signal, null);
+  assert.deepEqual(JSON.parse(stdout), [
+    `https://purpleflow.example/runs/${runId}`,
+    `https://purpleflow.example/runs/${runId}/log`,
+  ]);
+});
+
 test('телеграм: ожидание доставляется один раз со ссылкой на прогон', async (t) => {
   const bot = await startBot(t);
   const host = new FakeHost();

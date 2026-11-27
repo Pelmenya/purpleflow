@@ -168,7 +168,11 @@ export function checkOrigin(req: IncomingMessage, publicOrigin: string): boolean
   return req.headers.origin !== undefined && req.headers.origin === publicOrigin;
 }
 
-const returnRoutes = [/^\/$/, /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i];
+const returnRoutes = [
+  /^\/$/,
+  /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+  /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i,
+];
 
 export function isReturnRoute(path: string): string {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || path.includes('..')) return '/';
