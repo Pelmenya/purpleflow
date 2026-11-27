@@ -240,7 +240,7 @@ test('телеграм: огромный retry_after ограничен сутк
   assert.deepEqual(fs.readFileSync(queueFile(dataDir)), beforeStop);
 });
 
-test('телеграм: 429 соблюдает retry_after в секундах', async (t) => {
+test('телеграм: результаты всех трёх ответов 429 сохранены в очереди', async (t) => {
   const limited = intent('seconds');
   const missing = intent('missing');
   const invalid = intent('invalid');
@@ -252,7 +252,14 @@ test('телеграм: 429 соблюдает retry_after в секундах',
   });
   const dataDir = tempDir(t);
   startHandle(t, { dataDir, apiBase: bot.apiBase, host: new FakeHost([limited, missing, invalid]), now });
-  await waitFor(() => bot.requests.length === 3, 'Не все ответы 429 обработаны');
+  await waitFor(() => {
+    const entries = new Map(readQueue(dataDir).map((entry) => [entry.runId, entry]));
+    return (
+      entries.get(limited.runId)?.nextAttemptAt === now() + 30_000 &&
+      entries.get(missing.runId)?.nextAttemptAt === now() + 5_000 &&
+      entries.get(invalid.runId)?.nextAttemptAt === now() + 5_000
+    );
+  }, 'Не все ответы 429 сохранены в очереди');
   const entries = new Map(readQueue(dataDir).map((entry) => [entry.runId, entry]));
   assert.equal(entries.get(limited.runId)?.nextAttemptAt, now() + 30_000);
   assert.equal(entries.get(missing.runId)?.nextAttemptAt, now() + 5_000);
