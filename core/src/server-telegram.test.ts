@@ -439,6 +439,24 @@ test('телеграм: токен не попадает в причины', asy
   assert.equal(probe.ok, false);
 });
 
+test('телеграм: токен на границе обрезания не попадает в причины', async (t) => {
+  const current = intent('truncated-token');
+  const token = 'token-marker-boundary-123';
+  const description = `${'x'.repeat(190)}${token}`;
+  const bot = await startBot(t, () => ({ status: 400, body: JSON.stringify({ description }) }));
+  const dataDir = tempDir(t);
+  const handle = startHandle(t, { dataDir, apiBase: bot.apiBase, host: new FakeHost([current]), token });
+  await waitFor(() => readQueue(dataDir)[0]?.state === 'failed', 'Ошибка Bot API не сохранена');
+
+  const probe = await handle.probe();
+  const expected = `HTTP 400: ${'x'.repeat(190)}***`;
+  assert.equal(readQueue(dataDir)[0]?.lastError, expected);
+  assert.equal(probe.error, expected);
+  assert.equal(handle.status().lastError, expected);
+  const exposed = [JSON.stringify(readQueue(dataDir)), JSON.stringify(handle.status()), JSON.stringify(probe)].join('\n');
+  assert.equal(exposed.includes(token.slice(0, 10)), false);
+});
+
 test('телеграм: stop отписывается и прерывает отправку', async (t) => {
   const current = intent('abort');
   const response = deferred();

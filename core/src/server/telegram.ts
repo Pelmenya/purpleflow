@@ -239,7 +239,7 @@ export function startTelegram(options: TelegramOptions): TelegramHandle {
       body = undefined;
     }
     const record = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
-    const description = typeof record?.description === 'string' ? sanitized(record.description.slice(0, 200)) : '';
+    const description = typeof record?.description === 'string' ? sanitized(record.description).slice(0, 200) : '';
     const httpError = `HTTP ${response.status}${description ? `: ${description}` : ''}`;
 
     if (response.status >= 400 && response.status < 500 && response.status !== 429) {
