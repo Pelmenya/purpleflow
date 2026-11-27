@@ -15,15 +15,18 @@ type GateDecision = 'approve' | 'reject' | 'cancel' | 'accept' | 'fix';
 
 /**
  * Решение автопилота с паузой, чтобы человек успел увидеть гейт. За паузу человек мог нажать «Стоп», принять сам или удалить прогон:
- * автопилот решает, только если прогон всё ещё ждёт на том же гейте.
+ * автопилот решает, только если прогон всё ещё ждёт на той же версии того же гейта.
  */
-async function autoDecide(k: Kernel, id: string, gate: GateId, failure: string, comment?: string) {
+export async function autoDecide(k: Kernel, id: string, gate: GateId, waitId: string | undefined, failure: string, comment?: string) {
   await new Promise((res) => setTimeout(res, 800));
-  const r = k.store.load(id);
-  if (!r || r.status !== 'waiting' || r.next !== gate || k.decidingGates.has(id)) return;
-  await decide(k, id, 'approve', comment).catch((e) => {
-    const now = k.store.load(id);
-    if (now) k.warn(now, `${failure}: ${(e as Error).message}`);
+  await k.withRunLock(id, async () => {
+    const r = k.store.load(id);
+    if (!r || r.status !== 'waiting' || r.next !== gate || r.waitId !== waitId || r.waitDecided || k.decidingGates.has(id) || k.closing)
+      return;
+    await decide(k, id, 'approve', comment).catch((e) => {
+      const now = k.store.load(id);
+      if (now) k.warn(now, `${failure}: ${(e as Error).message}`);
+    });
   });
 }
 
@@ -82,6 +85,7 @@ async function applyDecision(
     comment: comment?.trim() || undefined,
     lineComments: lineComments?.length ? lineComments : undefined,
   });
+  r.waitDecided = true;
   const gateAttempt = [...r.attempts].reverse().find((a) => a.stage === gate && a.status === 'running');
   if (gateAttempt) {
     gateAttempt.status = 'done';
@@ -203,7 +207,7 @@ async function applyDecision(
   void k.engine.drive(r);
 }
 
-export function gateMessage(k: Kernel, run: RunFile): string | undefined {
+export function gateMessage(run: RunFile): string | undefined {
   if (run.next === 'gate0')
     return `У планировщика ${run.clarify?.questions.length ?? 0} ${(run.clarify?.questions.length ?? 0) === 1 ? 'вопрос' : 'вопроса'} по задаче — ответьте, чтобы план не строился на догадках.`;
   if (run.next === 'limit') return run.message ?? 'Попытки реализации исчерпаны. Дать ещё одну попытку?';
@@ -225,6 +229,10 @@ export function gateMessage(k: Kernel, run: RunFile): string | undefined {
 
 export function waitGate(k: Kernel, run: RunFile, gate: GateId, message?: string) {
   const open = run.attempts.find((a) => a.stage === gate && a.status === 'running');
+  if (!open || !run.waitId) {
+    run.waitId = crypto.randomUUID();
+    delete run.waitDecided;
+  }
   if (!open) k.begin(run, gate);
   // Гейт сам по себе пауза: отложенная пауза здесь исполнена, после решения прогон пойдёт дальше.
   if (run.pending?.some((p) => p.kind === 'pause')) {
@@ -255,6 +263,7 @@ export function waitGate(k: Kernel, run: RunFile, gate: GateId, message?: string
  * Вопросы уточнения, разбивка задачи на части и приёмка — всегда за человеком.
  */
 export async function autopilotGate(k: Kernel, run: RunFile, gate: GateId) {
+  const waitId = run.waitId;
   if (gate === 'gate1') {
     if (run.replanNote) {
       k.log(run, c.amber('Автопилот: план переписан после возврата с реализации — проверьте его сами.') + '\n');
@@ -266,7 +275,7 @@ export async function autopilotGate(k: Kernel, run: RunFile, gate: GateId) {
       return;
     }
     k.log(run, c.violet('Автопилот: план принят без остановки.') + '\n');
-    await autoDecide(k, run.id, gate, 'Автопилот не смог принять план — примите его сами', 'Автопилот');
+    await autoDecide(k, run.id, gate, waitId, 'Автопилот не смог принять план — примите его сами', 'Автопилот');
     return;
   }
   if (gate === 'limit' && run.stuck) {
@@ -278,6 +287,6 @@ export async function autopilotGate(k: Kernel, run: RunFile, gate: GateId) {
     r.autoRetried = true;
     k.save(r);
     k.log(run, c.violet('Автопилот: попытки исчерпаны — даю ещё одну сам; следующий раз решите вы.') + '\n');
-    await autoDecide(k, run.id, gate, 'Автопилот не смог дать ещё одну попытку');
+    await autoDecide(k, run.id, gate, waitId, 'Автопилот не смог дать ещё одну попытку');
   }
 }

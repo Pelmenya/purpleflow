@@ -53,6 +53,21 @@ export async function recover(k: Kernel): Promise<void> {
       await Promise.all(pids.map((pid) => killPid(pid, recordedAt)));
       k.store.writePids(group, []);
     }
+    if ((s.status === 'waiting' || s.status === 'stopped') && isGate(s.next)) {
+      const waiting = k.store.load(s.id);
+      if (waiting && !waiting.waitId) {
+        waiting.waitId = crypto.randomUUID();
+        if (
+          waiting.status === 'stopped' &&
+          waiting.next === 'limit' &&
+          !waiting.attempts.some((a) => a.stage === 'limit' && a.status === 'running') &&
+          waiting.gates.at(-1)?.gate === 'limit' &&
+          waiting.gates.at(-1)?.decision === 'cancel'
+        )
+          waiting.waitDecided = true;
+        k.save(waiting);
+      }
+    }
     if (s.status !== 'running' || s.missing) continue;
     const r = k.store.load(s.id);
     if (!r) continue;
@@ -396,7 +411,7 @@ export async function resume(k: Kernel, id: string) {
   await ensureOnBranch(k, r);
   r.message = undefined;
   if (r.next === 'plan') r.planRetries = 0;
-  if (isGate(r.next)) return waitGate(k, r, r.next as GateId, gateMessage(k, r));
+  if (isGate(r.next)) return waitGate(k, r, r.next as GateId, gateMessage(r));
   r.status = 'running';
   k.save(r);
   void drive(k, r);
@@ -541,7 +556,7 @@ export async function drive(k: Kernel, run: RunFile) {
       // «Стоп» между стадиями убивать некого — иначе он потерялся бы, а следующая стадия пошла как ни в чём не бывало.
       k.checkStop(run);
       if (isGate(run.next)) {
-        waitGate(k, run, run.next as GateId, gateMessage(k, run));
+        waitGate(k, run, run.next as GateId, gateMessage(run));
         break;
       }
       if (applyPending(k, run)) break;

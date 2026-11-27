@@ -311,6 +311,10 @@ export interface RunFile {
   status: RunStatus;
   /** Стадия, которая выполняется сейчас или будет запущена при продолжении. */
   next: StageId;
+  /** Версия текущей попытки ожидания решения на гейте. */
+  waitId?: string;
+  /** По текущей версии ожидания уже принято решение. */
+  waitDecided?: true;
   /** Вопрос человеку или причина остановки. */
   message?: string;
   attempts: StageAttempt[];

@@ -3,6 +3,7 @@ import { Orchestrator } from '../orchestrator.js';
 import { killAll, spawnScope } from '../proc.js';
 import type { CoreOptions } from '../runtime.js';
 import { trace } from '../trace.js';
+import { decideExpected, type ExpectedCommand } from './decisions.js';
 
 export const ACCEPTED_METHODS = [
   'dispatch',
@@ -17,7 +18,10 @@ export const ACCEPTED_METHODS = [
   'chatToTask',
 ] as const;
 
-export type ServerCore = Orchestrator & { shutdown(): Promise<void> };
+export type ServerCore = Orchestrator & {
+  shutdown(): Promise<void>;
+  decideExpected(runId: string, expectedWaitId: string, command: ExpectedCommand): Promise<{ ok: true } | { ok: false; conflict: true }>;
+};
 
 export function createServerCore(opts: CoreOptions): ServerCore {
   const scope = { stopped: false };
@@ -67,10 +71,22 @@ export function createServerCore(opts: CoreOptions): ServerCore {
   return new Proxy(orchestrator, {
     get(target, prop) {
       if (prop === 'shutdown') return shutdown;
+      if (prop === 'decideExpected')
+        return (runId: string, expectedWaitId: string, command: ExpectedCommand) =>
+          accepted(() => decideExpected(orchestrator.kernel, runId, expectedWaitId, command));
       const value: unknown = Reflect.get(target, prop);
       if (typeof value !== 'function' || prop === 'constructor') return value;
       return (...args: unknown[]) => {
-        const call = () => value.apply(orchestrator, args);
+        const call = () => {
+          const cmd = args[0] as { type?: string; runId?: string } | undefined;
+          if (prop === 'dispatch' && cmd?.runId && /^gate\.(approve|reject|cancel|accept|fix|answer)$/.test(cmd.type ?? ''))
+            return orchestrator.kernel.withRunLock(cmd.runId, async () => {
+              if (orchestrator.kernel.closing) throw new ShuttingDownError();
+              if (orchestrator.kernel.store.load(cmd.runId!)?.waitDecided) throw new Error('Решение по этому ожиданию уже принято');
+              return value.apply(orchestrator, args) as unknown;
+            });
+          return value.apply(orchestrator, args) as unknown;
+        };
         return (ACCEPTED_METHODS as readonly PropertyKey[]).includes(prop) ? accepted(call) : spawnScope.run(scope, call);
       };
     },

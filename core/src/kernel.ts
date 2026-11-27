@@ -68,6 +68,7 @@ export class Kernel {
   readonly envChecks = new Set<string>();
   /** Очередь прогонов сейчас разбирается. */
   pumping = false;
+  private runLocks = new Map<string, Promise<void>>();
   closing = false;
   engine!: EngineHooks;
 
@@ -136,6 +137,21 @@ export class Kernel {
     if (this.closing || this.deleted.has(run.id)) return;
     this.store.save(run);
     this.emit({ type: 'run.updated', run: structuredClone(run) });
+  }
+
+  async withRunLock<T>(runId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.runLocks.get(runId) ?? Promise.resolve();
+    const result = previous.then(fn);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.runLocks.set(runId, tail);
+    try {
+      return await result;
+    } finally {
+      if (this.runLocks.get(runId) === tail) this.runLocks.delete(runId);
+    }
   }
 
   mustLoad(id: string): RunFile {

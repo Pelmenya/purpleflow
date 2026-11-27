@@ -222,6 +222,18 @@ test('обзор: название прогона с <script> выводится
         ],
       };
     },
+    async startTask() {
+      throw new Error('не реализовано');
+    },
+    async decide() {
+      return { status: 'notFound' };
+    },
+    async readRun() {
+      return null;
+    },
+    async readChangeDocs() {
+      return null;
+    },
     async close() {},
   };
   const origin = await listen(t, createServerApp(config, host));
@@ -346,6 +358,18 @@ function stubHost(overrides: Partial<Host> = {}): Host {
   return {
     async snapshot() {
       return { projects: [], runs: [] };
+    },
+    async startTask() {
+      throw new Error('не реализовано');
+    },
+    async decide() {
+      return { status: 'notFound' };
+    },
+    async readRun() {
+      return null;
+    },
+    async readChangeDocs() {
+      return null;
     },
     async close() {},
     ...overrides,

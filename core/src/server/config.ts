@@ -18,10 +18,18 @@ export const SERVER_DEFAULTS: CoreSettings = {
   testTimeoutMin: 10,
 };
 
+export interface ServerProject {
+  id: string;
+  path: string;
+  testCommand?: string;
+  setupCommand?: string;
+  lintCommand?: string;
+}
+
 export interface ServerConfig {
   dataDir: string;
   promptsDir: string;
-  projects: { id: string; path: string }[];
+  projects: ServerProject[];
   publicOrigin: string;
   port: number;
   secretFile: string;
@@ -159,14 +167,24 @@ function projectsAt(file: string, value: unknown): ServerConfig['projects'] {
   return value.map((item, index) => {
     const field = `projects[${index}]`;
     const project = objectAt(file, item, field);
-    rejectUnknownKeys(file, project, ['id', 'path'], field);
+    rejectUnknownKeys(file, project, ['id', 'path', 'testCommand', 'setupCommand', 'lintCommand'], field);
     const id = project.id;
     if (typeof id !== 'string' || /^[A-Za-z0-9_-]+$/.exec(id)?.[0] !== id) {
       invalid(file, `${field}.id`, 'ожидался односегментный идентификатор');
     }
     if (ids.has(id)) invalid(file, `${field}.id`, 'повторный идентификатор');
     ids.add(id);
-    return { id, path: absolutePath(file, project.path, `${field}.path`) };
+    const command = (key: 'testCommand' | 'setupCommand' | 'lintCommand'): string | undefined => {
+      const value = project[key];
+      if (value !== undefined && typeof value !== 'string') invalid(file, `${field}.${key}`, 'ожидалась строка');
+      return value as string | undefined;
+    };
+    const result: ServerProject = { id, path: absolutePath(file, project.path, `${field}.path`) };
+    for (const key of ['testCommand', 'setupCommand', 'lintCommand'] as const) {
+      const value = command(key);
+      if (value !== undefined) result[key] = value;
+    }
+    return result;
   });
 }
 
