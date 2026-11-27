@@ -141,7 +141,7 @@ test('остановка: во время остановки службы нич
 });
 
 test('запуск из очереди с ошибкой — start_failed', unix, async (t) => {
-  const { core, g, save, until } = setup(t);
+  const { core, k, g, save, until } = setup(t);
   g('branch', 'purpleflow/x');
   const run = save({ status: 'queued', workspace: 'branch', branch: 'purpleflow/x', next: 'implement' });
 
@@ -149,6 +149,8 @@ test('запуск из очереди с ошибкой — start_failed', unix
 
   const stopped = await until(run.id, (r) => r.status === 'stopped');
   assert.equal(stopped.stop?.reason, 'start_failed');
+  assert.ok(stopped.message);
+  assert.ok(k.store.readLog(run.id).includes(stopped.message));
 });
 
 test('снятие с очереди перезаписывает устаревшую причину', unix, async (t) => {

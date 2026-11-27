@@ -385,12 +385,8 @@ export async function launchQueued(k: Kernel, run: RunFile) {
   } catch (e) {
     if (k.closing || k.deleted.has(run.id)) return;
     if (k.stopping.delete(run.id)) return k.markStopped(run, USER_STOP_MESSAGE);
-    run.status = 'stopped';
-    run.stop = stopRecord('start_failed');
-    run.message = `Не удалось начать прогон: ${(e as Error).message}`;
-    k.save(run);
-    k.emit({ type: 'run.finished', runId: run.id, status: 'stopped', message: run.message, reason: 'start_failed' });
-    return;
+    const message = `Не удалось начать прогон: ${(e as Error).message}`;
+    return k.markStopped(run, message, 'start_failed');
   } finally {
     k.preparing.delete(run.id);
   }
