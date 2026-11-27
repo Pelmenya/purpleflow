@@ -58,18 +58,41 @@ jobs:
         os: ${{ startsWith(github.ref, 'refs/tags/') && fromJSON('["ubuntu-latest", "macos-latest"]') || fromJSON('["ubuntu-latest"]') }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+        with:
+          fetch-depth: 0
+      # Только форк: e2e нужны при правках app/, core/ и сборки зависимостей. Иначе job сразу
+      # успешен — обязательная проверка ruleset не висит на PR с документацией.
+      # Тег, первый push ветки или недоступная база — e2e идут всегда.
+      - name: Нужны ли e2e
+        id: scope
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          run=true
+          if [[ "$GITHUB_REF" != refs/tags/* ]] && [[ -n "$BASE" ]] && [[ "$BASE" != 0000000000000000000000000000000000000000 ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only "$BASE" HEAD)
+            echo "$changed"
+            if ! grep -qE '^(app/|core/|package\.json$|package-lock\.json$|\.nvmrc$|\.github/workflows/ci\.yml$)' <<<"$changed"; then
+              run=false
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "e2e: $run"
+      - if: steps.scope.outputs.run == 'true'
+        uses: actions/setup-node@v4
         with:
           node-version-file: .nvmrc
           cache: npm
-      - run: npm ci
+      - if: steps.scope.outputs.run == 'true'
+        run: npm ci
       # Окно настоящее, поэтому на Linux нужен виртуальный дисплей.
-      - if: runner.os == 'Linux'
+      - if: steps.scope.outputs.run == 'true' && runner.os == 'Linux'
         run: xvfb-run -a npm run test:e2e
-      - if: runner.os != 'Linux'
+      - if: steps.scope.outputs.run == 'true' && runner.os != 'Linux'
         run: npm run test:e2e
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: failure() && steps.scope.outputs.run == 'true'
         with:
           name: e2e-${{ matrix.os }}
           path: |
