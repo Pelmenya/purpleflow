@@ -1,5 +1,6 @@
 import http, { type IncomingMessage, type RequestListener, type ServerResponse } from 'node:http';
 import { pathToFileURL } from 'node:url';
+import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
 import type { ChangeDocs, RunFile } from '../types.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
@@ -74,9 +75,9 @@ function decisionForm(run: RunFile, action: string, label: string, fields = ''):
   return `<form method="post" action="/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(run.waitId ?? '')}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
 }
 
-function waitingSections(run: RunFile, listed: HostSnapshot['runs'][number] | undefined, docs: ChangeDocs | null | undefined): string {
+function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined): string {
   if (run.status !== 'waiting') return '';
-  const reason = escapeHtml(listed?.reason ?? run.message ?? '');
+  const reason = escapeHtml(gateMessage(run) ?? run.message ?? '');
   if (run.next === 'gate0') {
     const fields = (run.clarify?.questions ?? [])
       .map((question, index) => {
@@ -95,10 +96,9 @@ function waitingSections(run: RunFile, listed: HostSnapshot['runs'][number] | un
     return `<section><h2>План изменения</h2><p>${reason}</p><h3>Proposal</h3><pre>${escapeHtml(docs.proposal)}</pre><h3>Задачи</h3><pre>${escapeHtml(docs.tasks)}</pre>${decisionForm(run, 'approve', 'Принять')}${decisionForm(run, 'reject', 'Вернуть с комментарием', comment)}${decisionForm(run, 'cancel', 'Отменить')}</section>`;
   }
   if (run.next === 'limit') {
-    const cause = listed?.limit?.cause ?? (run.stuck ? 'loop' : 'attempts');
-    const attempts = listed?.limit ?? { attempts: run.implAttemptsUsed, max: run.implAttemptsLimit };
+    const cause = run.stuck ? 'loop' : 'attempts';
     const title = cause === 'loop' ? 'Исполнитель и ревьюер ходят по кругу' : 'Попытки реализации исчерпаны';
-    const detail = cause === 'attempts' ? `<p>${attempts.attempts} из ${attempts.max}</p>` : '';
+    const detail = cause === 'attempts' ? `<p>${run.implAttemptsUsed} из ${run.implAttemptsLimit}</p>` : '';
     const comment = '<label>Комментарий (необязательно) <textarea name="comment"></textarea></label>';
     return `<section><h2>${title}</h2><p>${reason}</p>${detail}${decisionForm(run, 'approve', 'Ещё попытка', comment)}${decisionForm(run, 'cancel', 'Остановить')}</section>`;
   }
@@ -141,7 +141,7 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
     cancelled: 'Отменён',
     finished: 'Завершён',
   };
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, listed, docs)}${decisionHistory(run)}`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, docs)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {

@@ -411,7 +411,7 @@ export async function resume(k: Kernel, id: string) {
   await ensureOnBranch(k, r);
   r.message = undefined;
   if (r.next === 'plan') r.planRetries = 0;
-  if (isGate(r.next)) return waitGate(k, r, r.next as GateId, gateMessage(k, r));
+  if (isGate(r.next)) return waitGate(k, r, r.next as GateId, gateMessage(r));
   r.status = 'running';
   k.save(r);
   void drive(k, r);
@@ -556,7 +556,7 @@ export async function drive(k: Kernel, run: RunFile) {
       // «Стоп» между стадиями убивать некого — иначе он потерялся бы, а следующая стадия пошла как ни в чём не бывало.
       k.checkStop(run);
       if (isGate(run.next)) {
-        waitGate(k, run, run.next as GateId, gateMessage(k, run));
+        waitGate(k, run, run.next as GateId, gateMessage(run));
         break;
       }
       if (applyPending(k, run)) break;

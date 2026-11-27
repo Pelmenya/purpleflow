@@ -308,6 +308,33 @@ test('план: документы и версия из одного снимк�
   assert.equal(unstableDocsCalls, 3);
 });
 
+test('лимит: страница не смешивает версии ожидания', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const fixture = await browserFixture(t);
+  const run = waitingRunFixture(fixture.dataDir, fixture.project.path, {
+    next: 'limit',
+    waitId: 'WAIT-A',
+    implAttemptsUsed: 1,
+    implAttemptsLimit: 3,
+    message: 'Причина A',
+  });
+  const store = new RunStore(fixture.dataDir);
+  const snapshot = fixture.host.snapshot.bind(fixture.host);
+  t.mock.method(fixture.host, 'snapshot', async () => {
+    const current = store.load(run.id)!;
+    store.save({ ...current, waitId: 'WAIT-C', implAttemptsUsed: 3, message: 'Причина C' });
+    return snapshot();
+  });
+
+  const page = await (await fixture.browser.request(fixture.origin, `/runs/${run.id}`)).text();
+
+  assert.equal(expectedWaitIdOf(page), 'WAIT-A');
+  assert.match(page, /Причина A/);
+  assert.match(page, /1 из 3/);
+  assert.doesNotMatch(page, /WAIT-C/);
+  assert.doesNotMatch(page, /Причина C/);
+  assert.doesNotMatch(page, /3 из 3/);
+});
+
 test('лимит: ещё попытка и остановка', { skip: serverTestsSkip, timeout: 120_000 }, async (t) => {
   const fake = fakeClaude({
     implement: (n, cwd) =>

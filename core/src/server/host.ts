@@ -245,7 +245,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
                 ...summary,
                 waitId: full.waitId,
                 gate,
-                reason: gateMessage(runningCore.kernel, full) ?? full.message,
+                reason: gateMessage(full) ?? full.message,
                 ...(gate === 'limit'
                   ? {
                       limit: {

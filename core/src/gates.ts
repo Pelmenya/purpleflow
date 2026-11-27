@@ -207,7 +207,7 @@ async function applyDecision(
   void k.engine.drive(r);
 }
 
-export function gateMessage(k: Kernel, run: RunFile): string | undefined {
+export function gateMessage(run: RunFile): string | undefined {
   if (run.next === 'gate0')
     return `У планировщика ${run.clarify?.questions.length ?? 0} ${(run.clarify?.questions.length ?? 0) === 1 ? 'вопрос' : 'вопроса'} по задаче — ответьте, чтобы план не строился на догадках.`;
   if (run.next === 'limit') return run.message ?? 'Попытки реализации исчерпаны. Дать ещё одну попытку?';
