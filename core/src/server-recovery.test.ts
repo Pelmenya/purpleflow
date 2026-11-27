@@ -27,6 +27,8 @@ import type { CoreEvent, CoreSettings, RunFile } from './types.js';
 const recoveryTest = { skip: serverTestsSkip, timeout: 120_000 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+async function until<T, S extends T>(read: () => T | Promise<T>, done: (value: T) => value is S, timeoutMs?: number): Promise<S>;
+async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean, timeoutMs?: number): Promise<T>;
 async function until<T>(read: () => T | Promise<T>, done: (value: T) => boolean, timeoutMs = 60_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

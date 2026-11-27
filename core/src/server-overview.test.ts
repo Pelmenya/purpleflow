@@ -231,11 +231,17 @@ test('обзор: название прогона с <script> выводится
     async readRun() {
       return null;
     },
+    async readLog() {
+      return null;
+    },
     async readChangeDocs() {
       return null;
     },
     async readDiff() {
       return null;
+    },
+    async stop() {
+      return { status: 'notFound' };
     },
     async close() {},
   };
@@ -371,11 +377,17 @@ function stubHost(overrides: Partial<Host> = {}): Host {
     async readRun() {
       return null;
     },
+    async readLog() {
+      return null;
+    },
     async readChangeDocs() {
       return null;
     },
     async readDiff() {
       return null;
+    },
+    async stop() {
+      return { status: 'notFound' };
     },
     async close() {},
     ...overrides,
