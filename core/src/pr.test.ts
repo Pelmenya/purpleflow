@@ -108,7 +108,9 @@ esac
   const k = new Kernel({
     dataDir: path.join(root, 'data'),
     promptsDir: root,
-    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+    // Origin некоторых тестов — настоящий адрес gitlab.com: без этого git на машине с терминалом
+    // спрашивает логин и вешает прогон, а в CI без терминала просто падает.
+    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, GIT_TERMINAL_PROMPT: '0' },
     getSettings: () => settings,
   });
   const drives: RunFile[] = [];
