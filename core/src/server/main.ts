@@ -204,9 +204,9 @@ export function createServerApp(
           return;
         }
         if (body.kind === 'aborted') return;
-        await opts.testHooks?.beforeStartTask?.();
         const form = new URLSearchParams(body.body);
         const projectId = projectRunsMatch[1]!;
+        await opts.testHooks?.beforeStartTask?.();
         const result = await host.startTask(projectId, {
           task: form.get('task') ?? '',
           submissionId: form.get('submissionId') ?? '',
