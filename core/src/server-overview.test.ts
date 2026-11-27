@@ -225,6 +225,18 @@ test('обзор: название прогона с <script> выводится
     async startTask() {
       throw new Error('не реализовано');
     },
+    async listChats() {
+      return [];
+    },
+    async createChat() {
+      return null;
+    },
+    async readChat() {
+      return null;
+    },
+    async sendChat() {
+      return { status: 'notFound' };
+    },
     async decide() {
       return { status: 'notFound' };
     },
@@ -370,6 +382,18 @@ function stubHost(overrides: Partial<Host> = {}): Host {
     },
     async startTask() {
       throw new Error('не реализовано');
+    },
+    async listChats() {
+      return [];
+    },
+    async createChat() {
+      return null;
+    },
+    async readChat() {
+      return null;
+    },
+    async sendChat() {
+      return { status: 'notFound' };
     },
     async decide() {
       return { status: 'notFound' };

@@ -5,10 +5,11 @@ import path from 'node:path';
 import { ShuttingDownError } from '../kernel.js';
 import { gateMessage } from '../gates.js';
 import type { Orchestrator } from '../orchestrator.js';
+import { killPid } from '../proc.js';
 import type { CoreOptions, Listener } from '../runtime.js';
 import { isGate } from '../stage-info.js';
-import { writeAtomic } from '../store.js';
-import type { ChangeDocs, CoreSettings, DiffFile, GateId, RunFile, RunStatus, StageId } from '../types.js';
+import { RunStore, writeAtomic } from '../store.js';
+import type { ChangeDocs, ChatFile, ChatSummary, CoreSettings, DiffFile, GateId, RunFile, RunStatus, StageId } from '../types.js';
 import type { ServerProject } from './config.js';
 import type { ExpectedDecision } from './decisions.js';
 import { createServerCore, type ServerCore } from './guard.js';
@@ -49,10 +50,20 @@ export interface HostSnapshot {
 export type DecideResult =
   { status: 'ok' | 'conflict'; snapshot: RunFile } | { status: 'notFound' } | { status: 'invalid'; message: string };
 export type StopResult = { status: 'ok' } | { status: 'notFound' } | { status: 'conflict'; snapshot: RunFile };
+export type SendChatResult =
+  | { status: 'accepted' }
+  | { status: 'conflict' }
+  | { status: 'unknown' }
+  | { status: 'notFound' }
+  | { status: 'invalid'; message: string };
 
 export interface Host {
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
+  listChats(projectId: string): Promise<ChatSummary[] | null>;
+  createChat(projectId: string): Promise<ChatFile | null>;
+  readChat(chatId: string): Promise<{ chat: ChatFile; busy: boolean } | null>;
+  sendChat(chatId: string, text: string, submissionId: string): Promise<SendChatResult>;
   readRun(id: string): Promise<RunFile | null>;
   readLog(id: string): Promise<string | null>;
   readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
@@ -157,6 +168,11 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       const run = await runningCore.getRun(id);
       return run && allowProject(run.projectPath) ? run : null;
     };
+    const readChat = async (id: string): Promise<{ chat: ChatFile; busy: boolean } | null> => {
+      const result = await runningCore.getChat(id);
+      if (!result || result.chat.edits || !result.chat.projectPath || !allowProject(result.chat.projectPath)) return null;
+      return result;
+    };
     const readSubmission = async (submissionId: string): Promise<Submission | undefined> => {
       try {
         return JSON.parse(await fs.promises.readFile(submissionFile(submissionId), 'utf8')) as Submission;
@@ -224,8 +240,18 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
 
     const inFlight = new Map<string, { hash: string; promise: Promise<StartTaskResult> }>();
     let hostClosing = false;
-    let activeStartTasks = 0;
-    let notifyStartTasksIdle: (() => void) | undefined;
+    let activeOperations = 0;
+    let notifyOperationsIdle: (() => void) | undefined;
+    const operationStarted = (): void => {
+      activeOperations++;
+    };
+    const operationFinished = (): void => {
+      activeOperations--;
+      if (activeOperations === 0) {
+        notifyOperationsIdle?.();
+        notifyOperationsIdle = undefined;
+      }
+    };
     let closing: Promise<void> | undefined;
     return {
       async snapshot() {
@@ -280,17 +306,63 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         const hash = createHash('sha256').update(JSON.stringify({ projectId, task })).digest('hex');
         const existing = inFlight.get(submissionId);
         if (existing) return existing.hash === hash ? existing.promise : Promise.resolve({ status: 'conflict' });
-        activeStartTasks++;
+        operationStarted();
         const promise = performStartTask(projectId, task, submissionId, hash).finally(() => {
-          activeStartTasks--;
           if (inFlight.get(submissionId)?.promise === promise) inFlight.delete(submissionId);
-          if (activeStartTasks === 0) {
-            notifyStartTasksIdle?.();
-            notifyStartTasksIdle = undefined;
-          }
+          operationFinished();
         });
         inFlight.set(submissionId, { hash, promise });
         return promise;
+      },
+      async listChats(projectId) {
+        const project = projectById.get(projectId);
+        if (!project) return null;
+        const summaries = await runningCore.listChats();
+        const allowed = await Promise.all(
+          summaries.map(async (summary) => {
+            const view = await readChat(summary.id);
+            if (!view) return null;
+            return fs.realpathSync(view.chat.projectPath!) === project.path ? summary : null;
+          }),
+        );
+        return allowed.filter((summary): summary is ChatSummary => summary !== null);
+      },
+      createChat(projectId) {
+        if (hostClosing) throw new ShuttingDownError();
+        const project = projectById.get(projectId);
+        if (!project) return Promise.resolve(null);
+        operationStarted();
+        return (async () => {
+          try {
+            let chat: ChatFile;
+            try {
+              chat = await runningCore.createChat({ projectPath: project.path, edits: false });
+            } catch (error) {
+              if (hostClosing || runningCore.kernel.closing) throw new ShuttingDownError();
+              throw error;
+            }
+            const saved = await runningCore.getChat(chat.id);
+            if (!saved) throw new ShuttingDownError();
+            return saved.chat;
+          } finally {
+            operationFinished();
+          }
+        })();
+      },
+      readChat,
+      async sendChat(chatId, text, submissionId) {
+        if (hostClosing) throw new ShuttingDownError();
+        const message = text.trim();
+        if (!message) return { status: 'invalid', message: 'Введите сообщение' };
+        if (!submissionIdPattern.test(submissionId)) return { status: 'invalid', message: 'Некорректный идентификатор отправки' };
+        operationStarted();
+        try {
+          if (!(await readChat(chatId))) return { status: 'notFound' };
+          await runningCore.sendChat(chatId, message);
+          return { status: 'accepted' };
+        } finally {
+          operationFinished();
+        }
       },
       readRun,
       async readLog(id) {
@@ -388,8 +460,8 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         const stopping = runningCore.shutdown();
         closing = (async () => {
           try {
-            if (activeStartTasks > 0) {
-              await new Promise<void>((resolve) => (notifyStartTasksIdle = resolve));
+            if (activeOperations > 0) {
+              await new Promise<void>((resolve) => (notifyOperationsIdle = resolve));
             }
             await stopping;
           } finally {
