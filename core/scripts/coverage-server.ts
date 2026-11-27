@@ -3,13 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { countLines, erasedLines } from './coverage-lines.js';
 
 const LINES = 85;
 const BRANCHES = 75;
 const FUNCTIONS = 85;
 
 type Metric = 'LF' | 'LH' | 'BRF' | 'BRH' | 'FNF' | 'FNH';
-type CoverageRecord = Record<Metric, number> & { file: string };
+type CoverageRecord = Record<Metric, number> & { file: string; hits: Map<number, number> };
 
 function serverModules(dir: string): string[] {
   if (!fs.existsSync(dir)) return [];
@@ -25,7 +26,7 @@ function parseLcov(text: string): CoverageRecord[] {
   let current: CoverageRecord | null = null;
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith('SF:')) {
-      current = { file: line.slice(3), LF: 0, LH: 0, BRF: 0, BRH: 0, FNF: 0, FNH: 0 };
+      current = { file: line.slice(3), LF: 0, LH: 0, BRF: 0, BRH: 0, FNF: 0, FNH: 0, hits: new Map() };
       continue;
     }
     if (!current) continue;
@@ -34,10 +35,18 @@ function parseLcov(text: string): CoverageRecord[] {
       current = null;
       continue;
     }
+    const hit = /^DA:(\d+),(\d+)/.exec(line);
+    if (hit) current.hits.set(Number(hit[1]), Number(hit[2]));
     const metric = /^(LF|LH|BRF|BRH|FNF|FNH):(\d+)$/.exec(line);
     if (metric) current[metric[1] as Metric] = Number(metric[2]);
   }
   return records;
+}
+
+// LF и LH без строк, стёртых компиляцией (импорт и объявления типов): иначе порог зависел бы от версии Node.
+function withoutErasedLines(record: CoverageRecord, file: string): CoverageRecord {
+  if (record.hits.size === 0 || !fs.existsSync(file)) return record;
+  return { ...record, ...countLines(record.hits, erasedLines(fs.readFileSync(file, 'utf8'))) };
 }
 
 function percent(hit: number, total: number) {
@@ -135,14 +144,16 @@ if (process.platform !== 'linux') {
       const records = new Map<string, CoverageRecord>();
       if (fs.existsSync(lcov)) {
         for (const record of parseLcov(fs.readFileSync(lcov, 'utf8'))) {
-          records.set(path.resolve(root, record.file), record);
+          const file = path.resolve(root, record.file);
+          records.set(file, withoutErasedLines(record, file));
         }
       }
       if (fs.existsSync(baselineLcov)) {
         for (const record of parseLcov(fs.readFileSync(baselineLcov, 'utf8'))) {
           const file = path.resolve(root, record.file);
-          const executable = record.LF > 0 || record.BRF > 0 || record.FNF > 0;
-          if (executable && !records.has(file)) records.set(file, { ...record, LH: 0, BRH: 0, FNH: 0 });
+          const counted = withoutErasedLines(record, file);
+          const executable = counted.LF > 0 || record.BRF > 0 || record.FNF > 0;
+          if (executable && !records.has(file)) records.set(file, { ...counted, LH: 0, BRH: 0, FNH: 0 });
         }
       }
 

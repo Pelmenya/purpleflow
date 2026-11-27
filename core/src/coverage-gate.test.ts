@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { countLines, erasedLines } from '../scripts/coverage-lines.js';
 
 const SCRIPT = fileURLToPath(new URL('../scripts/coverage-server.ts', import.meta.url));
 const TSX = import.meta.resolve('tsx');
@@ -232,4 +233,39 @@ test('последовательность', async () => {
 
   const result = run(dir);
   assert.equal(result.status, 0, result.output);
+});
+
+test('порог покрытия: строки, стёртые компиляцией, не считаются', () => {
+  const source = [
+    "import type { A } from './a.js';",
+    "import { b, type C } from './b.js';",
+    "import { type D } from './d.js';",
+    'export type E = {',
+    '  id: string;',
+    '};',
+    'interface F { x: number }',
+    "export type { G } from './g.js';",
+    'declare const h: number;',
+    "export { b } from './b.js';",
+    'export function i() {',
+    '  return b;',
+    '}',
+  ].join('\n');
+  assert.deepEqual([...erasedLines(source)], [1, 3, 4, 5, 6, 7, 8, 9]);
+
+  // Node 22 на модуле в 18 строк: импорт и тип (1, 3) стёрты, но в LCOV непокрыты — 15 из 18 строк, 83.33%.
+  const hits = new Map(Array.from({ length: 18 }, (_, n) => [n + 1, [1, 3, 7].includes(n + 1) ? 0 : 1]));
+  assert.deepEqual(countLines(hits, new Set([1, 3])), { LF: 16, LH: 15 });
+  // От противного: непокрытая строка с кодом по-прежнему считается.
+  assert.deepEqual(
+    countLines(
+      new Map([
+        [1, 0],
+        [2, 0],
+        [3, 1],
+      ]),
+      new Set([1]),
+    ),
+    { LF: 2, LH: 1 },
+  );
 });
