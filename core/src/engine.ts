@@ -53,6 +53,21 @@ export async function recover(k: Kernel): Promise<void> {
       await Promise.all(pids.map((pid) => killPid(pid, recordedAt)));
       k.store.writePids(group, []);
     }
+    if ((s.status === 'waiting' || s.status === 'stopped') && isGate(s.next)) {
+      const waiting = k.store.load(s.id);
+      if (waiting && !waiting.waitId) {
+        waiting.waitId = crypto.randomUUID();
+        if (
+          waiting.status === 'stopped' &&
+          waiting.next === 'limit' &&
+          !waiting.attempts.some((a) => a.stage === 'limit' && a.status === 'running') &&
+          waiting.gates.at(-1)?.gate === 'limit' &&
+          waiting.gates.at(-1)?.decision === 'cancel'
+        )
+          waiting.waitDecided = true;
+        k.save(waiting);
+      }
+    }
     if (s.status !== 'running' || s.missing) continue;
     const r = k.store.load(s.id);
     if (!r) continue;

@@ -54,6 +54,7 @@ export async function answer(k: Kernel, id: string, answers: { q: string; a: str
     decision: 'approve',
     comment: clean.map((x) => `${x.q} — ${x.a}`).join('\n') || undefined,
   });
+  r.waitDecided = true;
   const gateAttempt = [...r.attempts].reverse().find((a) => a.stage === 'gate0' && a.status === 'running');
   if (gateAttempt)
     Object.assign(gateAttempt, {
