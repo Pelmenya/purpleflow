@@ -1,20 +1,105 @@
+import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { TestContext } from 'node:test';
 import { emptyUsage, type AgentResult } from './agents/common.js';
 import { loadLoginShellEnv, prependPath } from './env.js';
 import type { CoreSettings, GateId, RunFile } from './types.js';
 import type { Orchestrator } from './orchestrator.js';
 import type { CoreOptions } from './runtime.js';
-import type { ServerProject } from './server/config.js';
+import type { ServerConfig, ServerProject } from './server/config.js';
 import { startHost, type Host } from './server/host.js';
 import { RunStore } from './store.js';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const PROMPTS = path.join(ROOT, 'core', 'prompts');
 const env = prependPath(loadLoginShellEnv(), path.join(ROOT, 'node_modules', '.bin'));
+export const PUBLIC_ORIGIN = 'https://purpleflow.example';
+const SECRET = 'секрет владельца';
+
+export function configFor(dataDir: string, project: ServerProject, settings?: CoreSettings): ServerConfig {
+  const secretFile = path.join(dataDir, 'secret');
+  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  return {
+    dataDir,
+    promptsDir: PROMPTS,
+    projects: [project],
+    publicOrigin: PUBLIC_ORIGIN,
+    port: 0,
+    secretFile,
+    settings: settings ?? {
+      toolPaths: {},
+      enabledAgents: ['claude'],
+      proxy: { baseUrl: '', apiKey: '' },
+      models: { planner: '', executor: '', reviewer: '' },
+      agents: { planner: 'claude', executor: 'claude', reviewer: 'claude' },
+      agentTimeoutMin: 1,
+      testTimeoutMin: 1,
+      maxParallel: 1,
+    },
+  };
+}
+
+export async function openServer(handler: http.RequestListener): Promise<{ origin: string; close: () => Promise<void> }> {
+  const server = http.createServer(handler);
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  let closing: Promise<void> | undefined;
+  return {
+    origin: `http://127.0.0.1:${address.port}`,
+    close() {
+      if (!server.listening) return Promise.resolve();
+      closing ??= new Promise<void>((resolve, reject) => {
+        server.closeAllConnections();
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+      return closing;
+    },
+  };
+}
+
+export async function listen(t: TestContext, handler: http.RequestListener): Promise<string> {
+  const server = await openServer(handler);
+  t.after(server.close);
+  return server.origin;
+}
+
+export class Browser {
+  private cookie = '';
+
+  async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
+    const headers = new Headers(init.headers);
+    if (this.cookie) headers.set('Cookie', this.cookie);
+    if ((init.method ?? 'GET').toUpperCase() === 'POST') headers.set('Origin', PUBLIC_ORIGIN);
+    const response = await fetch(`${origin}${route}`, { redirect: 'manual', ...init, headers });
+    const cookie = response.headers.get('set-cookie');
+    if (cookie) this.cookie = cookie.split(';', 1)[0] ?? '';
+    return response;
+  }
+
+  login(origin: string, returnTo = '/'): Promise<Response> {
+    return this.request(origin, '/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret: SECRET, returnTo }),
+    });
+  }
+}
+
+export function postDecision(browser: Browser, origin: string, runId: string, fields: Record<string, string>): Promise<Response> {
+  return browser.request(origin, `/runs/${runId}/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams(fields),
+  });
+}
 
 export const hasOpenspec = (() => {
   try {

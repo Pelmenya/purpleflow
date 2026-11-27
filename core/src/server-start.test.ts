@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { once } from 'node:events';
 import fs from 'node:fs';
-import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
@@ -10,66 +8,24 @@ import type { AgentRunOptions } from './agents/common.js';
 import type { StartRunInput } from './model/protocol.js';
 import type { Orchestrator } from './orchestrator.js';
 import type { CoreOptions } from './runtime.js';
-import { loadServerConfig, SERVER_DEFAULTS, type ServerConfig, type ServerProject } from './server/config.js';
+import { loadServerConfig, SERVER_DEFAULTS } from './server/config.js';
 import { createServerApp } from './server/main.js';
-import { fakeClaude, makeRepo, ROOT, serverTestsSkip, startTestHost, untilGate } from './server-testkit.test.js';
-
-const PUBLIC_ORIGIN = 'https://purpleflow.example';
-const SECRET = 'секрет владельца';
+import {
+  Browser,
+  configFor,
+  fakeClaude,
+  listen,
+  makeRepo,
+  PUBLIC_ORIGIN,
+  serverTestsSkip,
+  startTestHost,
+  untilGate,
+} from './server-testkit.test.js';
 
 function deferred(): { promise: Promise<void>; open: () => void } {
   let open!: () => void;
   const promise = new Promise<void>((resolve) => (open = resolve));
   return { promise, open };
-}
-
-function configFor(dataDir: string, project: ServerProject): ServerConfig {
-  const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
-  return {
-    dataDir,
-    promptsDir: path.join(ROOT, 'core', 'prompts'),
-    projects: [project],
-    publicOrigin: PUBLIC_ORIGIN,
-    port: 0,
-    secretFile,
-    settings: structuredClone(SERVER_DEFAULTS),
-  };
-}
-
-async function listen(t: TestContext, handler: http.RequestListener): Promise<string> {
-  const server = http.createServer(handler);
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  t.after(() => {
-    server.closeAllConnections();
-    return new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-  });
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  return `http://127.0.0.1:${address.port}`;
-}
-
-class Browser {
-  private cookie = '';
-
-  async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    if (this.cookie) headers.set('Cookie', this.cookie);
-    if ((init.method ?? 'GET').toUpperCase() === 'POST') headers.set('Origin', PUBLIC_ORIGIN);
-    const response = await fetch(`${origin}${route}`, { redirect: 'manual', ...init, headers });
-    const cookie = response.headers.get('set-cookie');
-    if (cookie) this.cookie = cookie.split(';', 1)[0] ?? '';
-    return response;
-  }
-
-  login(origin: string, returnTo = '/'): Promise<Response> {
-    return this.request(origin, '/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ secret: SECRET, returnTo }),
-    });
-  }
 }
 
 function submissionIdOf(html: string): string {
@@ -105,7 +61,7 @@ test('старт: задача из браузера продолжается п
     },
   });
   t.after(() => fixture.close());
-  const config = configFor(fixture.dataDir, fixture.project);
+  const config = configFor(fixture.dataDir, fixture.project, structuredClone(SERVER_DEFAULTS));
   const origin = await listen(
     t,
     createServerApp(config, fixture.host, {
@@ -187,7 +143,7 @@ function watchStarts(core: Orchestrator): StartRunInput[] {
 }
 
 async function appFor(t: TestContext, fixture: Fixture, opts: Parameters<typeof createServerApp>[2] = {}) {
-  const config = configFor(fixture.dataDir, fixture.project);
+  const config = configFor(fixture.dataDir, fixture.project, structuredClone(SERVER_DEFAULTS));
   const origin = await listen(t, createServerApp(config, fixture.host, opts));
   const browser = new Browser();
   assert.equal((await browser.login(origin)).status, 303);

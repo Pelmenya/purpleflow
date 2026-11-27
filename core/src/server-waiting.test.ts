@@ -1,96 +1,23 @@
 import assert from 'node:assert/strict';
-import { once } from 'node:events';
 import fs from 'node:fs';
-import http from 'node:http';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
-import type { ServerConfig, ServerProject } from './server/config.js';
 import type { HostSnapshot } from './server/host.js';
 import { createServerApp } from './server/main.js';
-import { fakeClaude, makeRepo, ROOT, serverTestsSkip, startTestHost, untilGate, waitingRunFixture } from './server-testkit.test.js';
+import {
+  Browser,
+  configFor,
+  fakeClaude,
+  listen,
+  makeRepo,
+  openServer,
+  postDecision,
+  serverTestsSkip,
+  startTestHost,
+  untilGate,
+  waitingRunFixture,
+} from './server-testkit.test.js';
 import { RunStore } from './store.js';
-
-const PUBLIC_ORIGIN = 'https://purpleflow.example';
-const SECRET = 'секрет владельца';
-
-function configFor(dataDir: string, project: ServerProject): ServerConfig {
-  const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
-  return {
-    dataDir,
-    promptsDir: path.join(ROOT, 'core', 'prompts'),
-    projects: [project],
-    publicOrigin: PUBLIC_ORIGIN,
-    port: 0,
-    secretFile,
-    settings: {
-      toolPaths: {},
-      enabledAgents: ['claude'],
-      proxy: { baseUrl: '', apiKey: '' },
-      models: { planner: '', executor: '', reviewer: '' },
-      agents: { planner: 'claude', executor: 'claude', reviewer: 'claude' },
-      agentTimeoutMin: 1,
-      testTimeoutMin: 1,
-      maxParallel: 1,
-    },
-  };
-}
-
-async function openServer(handler: http.RequestListener): Promise<{ origin: string; close: () => Promise<void> }> {
-  const server = http.createServer(handler);
-  server.listen(0, '127.0.0.1');
-  await once(server, 'listening');
-  const address = server.address();
-  assert.ok(address && typeof address === 'object');
-  let closing: Promise<void> | undefined;
-  return {
-    origin: `http://127.0.0.1:${address.port}`,
-    close() {
-      if (!server.listening) return Promise.resolve();
-      closing ??= new Promise<void>((resolve, reject) => {
-        server.closeAllConnections();
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      return closing;
-    },
-  };
-}
-
-async function listen(t: TestContext, handler: http.RequestListener): Promise<string> {
-  const server = await openServer(handler);
-  t.after(server.close);
-  return server.origin;
-}
-
-class Browser {
-  private cookie = '';
-
-  async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
-    const headers = new Headers(init.headers);
-    if (this.cookie) headers.set('Cookie', this.cookie);
-    if ((init.method ?? 'GET').toUpperCase() === 'POST') headers.set('Origin', PUBLIC_ORIGIN);
-    const response = await fetch(`${origin}${route}`, { redirect: 'manual', ...init, headers });
-    const cookie = response.headers.get('set-cookie');
-    if (cookie) this.cookie = cookie.split(';', 1)[0] ?? '';
-    return response;
-  }
-
-  login(origin: string): Promise<Response> {
-    return this.request(origin, '/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ secret: SECRET, returnTo: '/' }),
-    });
-  }
-}
-
-function postDecision(browser: Browser, origin: string, runId: string, fields: Record<string, string>): Promise<Response> {
-  return browser.request(origin, `/runs/${runId}/decision`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(fields),
-  });
-}
 
 test('ожидания: две сессии на одном gate1 — одно решение, второе 409', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
   const fake = fakeClaude({ implement: () => {}, review: () => ({ blocking: [], notes: [] }) });
