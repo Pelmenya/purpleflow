@@ -122,9 +122,10 @@ test('parseEtime: все формы вывода ps', () => {
 });
 
 test('killPid: процесс, начавшийся после записи PID, чужой — его не трогаем', { skip: process.platform === 'win32' }, async () => {
-  const p = run('sleep', ['30'], { cwd: process.cwd(), env: process.env, group: 'g-pid' });
+  // Длительность уникальна: `sleep 30` запускают и другие тесты, идущие параллельно, и pgrep -n нашёл бы чужой процесс.
+  const p = run('sleep', ['30.0417'], { cwd: process.cwd(), env: process.env, group: 'g-pid' });
   await new Promise((r) => setTimeout(r, 200));
-  const out = await run('pgrep', ['-n', '-f', '^sleep 30$'], { cwd: process.cwd(), env: process.env });
+  const out = await run('pgrep', ['-n', '-f', '^sleep 30\\.0417$'], { cwd: process.cwd(), env: process.env });
   const pid = Number(out.stdout.trim());
   assert.ok(pid > 0);
   try {
