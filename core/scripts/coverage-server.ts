@@ -90,7 +90,6 @@ if (process.platform !== 'linux') {
     try {
       const coverageArgs = [
         '--experimental-test-coverage',
-        '--test-concurrency=1',
         '--test-coverage-include=src/server/**/*.ts',
         '--test-coverage-exclude=src/server/main.ts',
         '--test-coverage-exclude=src/**/*.test.ts',
