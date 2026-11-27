@@ -238,6 +238,61 @@ export function waitingRunFixture(dataDir: string, projectPath: string, partial:
   return run;
 }
 
+export function makeServerStand(opts: { testCommand?: string } = {}) {
+  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'purpleflow-server-')));
+  const root = path.join(sandbox, 'checkout');
+  const dataDir = path.join(sandbox, 'data');
+  const bin = path.join(sandbox, 'bin');
+  fs.mkdirSync(root, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+
+  const delayFile = path.join(sandbox, 'delay-ms');
+  const fakeLog = path.join(sandbox, 'fake-claude.jsonl');
+  fs.writeFileSync(delayFile, '0');
+  const claude = path.join(bin, 'claude');
+  const fake = fileURLToPath(new URL('../../app/e2e/fake-claude.mjs', import.meta.url));
+  fs.writeFileSync(
+    claude,
+    `#!/bin/sh\nFAKE_CLAUDE_DELAY_MS="$(cat "${delayFile}")" FAKE_CLAUDE_LOG="${fakeLog}" exec "${process.execPath}" "${fake}" "$@"\n`,
+    { mode: 0o755 },
+  );
+
+  const git = (...args: string[]) => execFileSync('git', args, { cwd: root });
+  git('init', '-q', '-b', 'main');
+  git('config', 'user.email', 'server@example.test');
+  git('config', 'user.name', 'Server test');
+  fs.mkdirSync(path.join(root, 'src'));
+  fs.writeFileSync(path.join(root, 'src/math.js'), 'export const add = (a, b) => a + b;\n');
+  fs.writeFileSync(path.join(root, 'package.json'), '{ "name": "server-stand", "type": "module" }\n');
+  git('add', '-A');
+  git('commit', '-qm', 'Начало');
+
+  const project: ServerProject = { id: 'p1', path: root, testCommand: opts.testCommand ?? 'node --version' };
+  const secretFile = path.join(dataDir, 'secret');
+  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  const configFile = path.join(sandbox, 'server.json');
+  fs.writeFileSync(
+    configFile,
+    JSON.stringify({
+      dataDir,
+      promptsDir: PROMPTS,
+      projects: [project],
+      publicOrigin: PUBLIC_ORIGIN,
+      port: 43_210,
+      secretFile,
+      settings: {
+        toolPaths: { claude, openspec: path.join(ROOT, 'node_modules', '.bin', 'openspec') },
+        agents: { planner: 'claude', executor: 'claude', reviewer: 'claude' },
+        enabledAgents: ['claude'],
+        agentTimeoutMin: 1,
+        testTimeoutMin: 1,
+      },
+    }),
+  );
+  return { root, dataDir, configFile, project, delayFile, fakeLog };
+}
+
 export async function startTestHost(
   opts: {
     dataDir?: string;

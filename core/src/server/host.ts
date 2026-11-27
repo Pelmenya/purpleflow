@@ -8,7 +8,7 @@ import type { Orchestrator } from '../orchestrator.js';
 import type { CoreOptions, Listener } from '../runtime.js';
 import { isGate } from '../stage-info.js';
 import { writeAtomic } from '../store.js';
-import type { ChangeDocs, CoreSettings, GateId, RunFile, RunStatus, StageId } from '../types.js';
+import type { ChangeDocs, CoreSettings, DiffFile, GateId, RunFile, RunStatus, StageId } from '../types.js';
 import type { ServerProject } from './config.js';
 import type { ExpectedDecision } from './decisions.js';
 import { createServerCore, type ServerCore } from './guard.js';
@@ -54,6 +54,7 @@ export interface Host {
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   readRun(id: string): Promise<RunFile | null>;
   readChangeDocs(id: string): Promise<{ run: RunFile; docs: ChangeDocs | null } | null>;
+  readDiff(id: string): Promise<{ run: RunFile; diff: DiffFile[] | null } | null>;
   decide(runId: string, command: ExpectedDecision): Promise<DecideResult>;
   close(): Promise<void>;
 }
@@ -302,6 +303,31 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
           previous = current;
         }
         return { run: previous, docs: null };
+      },
+      async readDiff(id) {
+        const first = await readRun(id);
+        if (!first) return null;
+        let previous = first;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          let diff: DiffFile[];
+          try {
+            diff = await runningCore.getDiff(id);
+          } catch (error) {
+            return (await readRun(id)) ? Promise.reject(error) : null;
+          }
+          const current = await readRun(id);
+          if (!current) return null;
+          if (
+            current.status === previous.status &&
+            current.next === previous.next &&
+            current.waitId === previous.waitId &&
+            current.waitDecided === previous.waitDecided
+          ) {
+            return { run: current, diff };
+          }
+          previous = current;
+        }
+        return { run: previous, diff: null };
       },
       async decide(runId, command) {
         let snapshot = await readRun(runId);

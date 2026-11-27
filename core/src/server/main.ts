@@ -2,7 +2,8 @@ import http, { type IncomingMessage, type RequestListener, type ServerResponse }
 import { pathToFileURL } from 'node:url';
 import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
-import type { ChangeDocs, RunFile } from '../types.js';
+import type { ChangeDocs, DiffFile, RunFile } from '../types.js';
+import { renderAcceptance } from './accept-page.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
@@ -75,7 +76,7 @@ function decisionForm(run: RunFile, action: string, label: string, fields = ''):
   return `<form method="post" action="/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(run.waitId ?? '')}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
 }
 
-function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined): string {
+function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined, diff: DiffFile[] | null | undefined): string {
   if (run.status !== 'waiting') return '';
   const reason = escapeHtml(gateMessage(run) ?? run.message ?? '');
   if (run.next === 'gate0') {
@@ -102,7 +103,11 @@ function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined): str
     const comment = '<label>Комментарий (необязательно) <textarea name="comment"></textarea></label>';
     return `<section><h2>${title}</h2><p>${reason}</p>${detail}${decisionForm(run, 'approve', 'Ещё попытка', comment)}${decisionForm(run, 'cancel', 'Остановить')}</section>`;
   }
-  if (run.next === 'gate2') return `<section><h2>Приёмка</h2><p>${reason}</p></section>`;
+  if (run.next === 'gate2') {
+    if (diff === null) return '<section><h2>Приёмка</h2><p>Дифф меняется — обновите страницу</p></section>';
+    if (diff === undefined) return '';
+    return renderAcceptance(run, diff, run.waitId ?? '');
+  }
   return '';
 }
 
@@ -124,13 +129,22 @@ function decisionHistory(run: RunFile): string {
   return `<section><h2>История решений</h2>${entries ? `<ol>${entries}</ol>` : '<p>Решений пока нет.</p>'}</section>`;
 }
 
-async function readRunView(host: Host, initial: RunFile): Promise<{ run: RunFile; docs: ChangeDocs | null | undefined } | null> {
-  if (initial.status !== 'waiting' || initial.next !== 'gate1') return { run: initial, docs: undefined };
-  const result = await host.readChangeDocs(initial.id);
-  return result ? { run: result.run, docs: result.docs } : null;
+async function readRunView(
+  host: Host,
+  initial: RunFile,
+): Promise<{ run: RunFile; docs: ChangeDocs | null | undefined; diff: DiffFile[] | null | undefined } | null> {
+  if (initial.status === 'waiting' && initial.next === 'gate1') {
+    const result = await host.readChangeDocs(initial.id);
+    return result ? { run: result.run, docs: result.docs, diff: undefined } : null;
+  }
+  if (initial.status === 'waiting' && initial.next === 'gate2') {
+    const result = await host.readDiff(initial.id);
+    return result ? { run: result.run, docs: undefined, diff: result.diff } : null;
+  }
+  return { run: initial, docs: undefined, diff: undefined };
 }
 
-function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: ChangeDocs | null): string {
+function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: ChangeDocs | null, diff?: DiffFile[] | null): string {
   const listed = snapshot.runs.find((item) => item.id === run.id);
   const project = snapshot.projects.find((item) => item.id === listed?.projectId);
   const statuses: Record<RunFile['status'], string> = {
@@ -141,7 +155,7 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
     cancelled: 'Отменён',
     finished: 'Завершён',
   };
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, docs)}${decisionHistory(run)}`;
+  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
@@ -335,7 +349,8 @@ export function createServerApp(
         else if (result.status === 'invalid') send(res, 400, result.message);
         else {
           const view = await readRunView(host, result.snapshot);
-          if (view) html(res, 409, runPage(await host.snapshot(), view.run, 'Решение уже принято на другом устройстве', view.docs));
+          if (view)
+            html(res, 409, runPage(await host.snapshot(), view.run, 'Решение уже принято на другом устройстве', view.docs, view.diff));
           else send(res, 404, 'Прогон не найден');
         }
         return;
@@ -344,7 +359,7 @@ export function createServerApp(
       if (runMatch && method === 'GET') {
         const initial = await host.readRun(runMatch[1]!);
         const view = initial ? await readRunView(host, initial) : null;
-        if (view) html(res, 200, runPage(await host.snapshot(), view.run, '', view.docs));
+        if (view) html(res, 200, runPage(await host.snapshot(), view.run, '', view.docs, view.diff));
         else send(res, 404, 'Прогон не найден');
         return;
       }
