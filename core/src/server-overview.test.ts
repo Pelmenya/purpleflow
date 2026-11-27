@@ -234,6 +234,9 @@ test('обзор: название прогона с <script> выводится
     async readChangeDocs() {
       return null;
     },
+    async readDiff() {
+      return null;
+    },
     async close() {},
   };
   const origin = await listen(t, createServerApp(config, host));
@@ -369,6 +372,9 @@ function stubHost(overrides: Partial<Host> = {}): Host {
       return null;
     },
     async readChangeDocs() {
+      return null;
+    },
+    async readDiff() {
       return null;
     },
     async close() {},

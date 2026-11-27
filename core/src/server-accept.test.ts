@@ -180,3 +180,188 @@ test('приёмка: ошибка диффа при существующем п
   assert.equal(response.status, 500);
   assert.ok(await fixture.core.getRun(fixture.run.id));
 });
+
+async function runToGate2(fixture: Awaited<ReturnType<typeof acceptanceFixture>>) {
+  const started = await fixture.host.startTask('p1', {
+    task: 'Добавь функцию mul в src/math.js',
+    submissionId: crypto.randomUUID(),
+  });
+  assert.equal(started.status, 'started');
+  const runId = started.status === 'started' ? started.runId : '';
+  const gate1 = await untilGate(fixture.core, runId, 'gate1');
+  assert.equal(
+    (await postDecision(fixture.first, fixture.origin, runId, { expectedWaitId: gate1.waitId!, action: 'approve' })).status,
+    303,
+  );
+  const gate2 = await untilGate(fixture.core, runId, 'gate2');
+  return { runId, gate2 };
+}
+
+test('приёмка: повтор и устаревшая форма', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const fixture = await acceptanceFixture(t);
+  const { runId, gate2 } = await runToGate2(fixture);
+  const fields = { expectedWaitId: gate2.waitId!, action: 'approve' };
+  assert.equal((await postDecision(fixture.first, fixture.origin, runId, fields)).status, 303);
+
+  const repeated = await postDecision(fixture.second, fixture.origin, runId, fields);
+  assert.equal(repeated.status, 409);
+  const repeatedPage = await repeated.text();
+  assert.match(repeatedPage, /Решение уже принято на другом устройстве/);
+  const current = (await fixture.core.getRun(runId))!;
+  assert.match(repeatedPage, new RegExp(`data-status="${current.status}"`));
+  assert.match(repeatedPage, new RegExp(`<dt>Стадия</dt><dd>${current.next}</dd>`));
+  assert.equal(current.gates.filter((gate) => gate.gate === 'gate2').length, 1);
+
+  const stale = await postDecision(fixture.second, fixture.origin, runId, {
+    expectedWaitId: gate2.waitId!,
+    action: 'reject',
+    comment: 'Поздний возврат',
+  });
+  assert.equal(stale.status, 409);
+  const staleEmpty = await postDecision(fixture.second, fixture.origin, runId, {
+    expectedWaitId: gate2.waitId!,
+    action: 'reject',
+    comment: '   ',
+  });
+  assert.equal(staleEmpty.status, 409);
+});
+
+test('приёмка: принятие даёт коммит в ветке', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const fixture = await acceptanceFixture(t);
+  const { runId, gate2 } = await runToGate2(fixture);
+  const accepted = await postDecision(fixture.second, fixture.origin, runId, {
+    expectedWaitId: gate2.waitId!,
+    action: 'approve',
+  });
+  assert.equal(accepted.status, 303);
+
+  let run = (await fixture.host.readRun(runId))!;
+  for (let i = 0; i < 300 && !run.commit; i++) {
+    assert.notEqual(run.status, 'stopped', run.message);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    run = (await fixture.host.readRun(runId))!;
+  }
+  assert.equal(run.status, 'finished');
+  assert.ok(run.commit);
+  const head = execFileSync('git', ['rev-parse', run.branch], { cwd: fixture.stand.root, encoding: 'utf8' }).trim();
+  assert.equal(run.commit, head);
+});
+
+test(
+  'приёмка: возврат с комментарием запускает новый круг, второй клиент видит данные последнего круга',
+  { skip: serverTestsSkip, timeout: 60_000 },
+  async (t) => {
+    const counter = `${process.env.TMPDIR ?? '/tmp'}/purpleflow-accept-counter-${crypto.randomUUID()}`;
+    const testCommand = `${process.execPath} -e 'const fs=require("node:fs");const f=${JSON.stringify(counter)};const n=Number(fs.existsSync(f)?fs.readFileSync(f,"utf8"):"0")+1;fs.writeFileSync(f,String(n));console.log("прогон №"+n)'`;
+    const fixture = await acceptanceFixture(t, { testCommand });
+    const { runId, gate2 } = await runToGate2(fixture);
+    const firstRun = (await fixture.core.getRun(runId))!;
+    assert.equal(firstRun.tests.at(-1)!.command, testCommand);
+    const out1 = firstRun.tests.at(-1)!.output;
+    const beforeInvalid = {
+      status: firstRun.status,
+      next: firstRun.next,
+      waitId: firstRun.waitId,
+      gates: firstRun.gates,
+      feedback: firstRun.feedback,
+      attempts: firstRun.attempts.length,
+      implAttemptsUsed: firstRun.implAttemptsUsed,
+    };
+    const empty = await postDecision(fixture.second, fixture.origin, runId, {
+      expectedWaitId: gate2.waitId!,
+      action: 'reject',
+      comment: '   ',
+    });
+    assert.equal(empty.status, 400);
+    const afterInvalid = (await fixture.core.getRun(runId))!;
+    assert.deepEqual(
+      {
+        status: afterInvalid.status,
+        next: afterInvalid.next,
+        waitId: afterInvalid.waitId,
+        gates: afterInvalid.gates,
+        feedback: afterInvalid.feedback,
+        attempts: afterInvalid.attempts.length,
+        implAttemptsUsed: afterInvalid.implAttemptsUsed,
+      },
+      beforeInvalid,
+    );
+
+    const comment = 'Нужен ещё один круг';
+    const rejected = await postDecision(fixture.second, fixture.origin, runId, {
+      expectedWaitId: gate2.waitId!,
+      action: 'reject',
+      comment,
+    });
+    assert.equal(rejected.status, 303);
+    const decision = (await fixture.core.getRun(runId))!.gates.find((gate) => gate.gate === 'gate2');
+    assert.equal(decision?.decision, 'reject');
+    assert.equal(decision?.comment, comment);
+    const secondGate = await untilGate(fixture.core, runId, 'gate2');
+    assert.notEqual(secondGate.waitId, gate2.waitId);
+    const secondRun = (await fixture.core.getRun(runId))!;
+    assert.equal(secondRun.tests.at(-1)!.command, testCommand);
+    assert.ok(secondRun.attempts.some((attempt) => attempt.stage === 'implement' && attempt.attempt === 2));
+    const out2 = secondRun.tests.at(-1)!.output;
+    assert.notEqual(out2, out1);
+    const marker1 = /прогон №\d+/.exec(out1)?.[0];
+    const marker2 = /прогон №\d+/.exec(out2)?.[0];
+    assert.ok(marker1);
+    assert.ok(marker2);
+
+    const page = await (await fixture.first.request(fixture.origin, `/runs/${runId}`)).text();
+    assert.ok(page.includes(marker2));
+    assert.ok(!page.includes(marker1));
+    assert.match(page, /Нужен ещё один круг/);
+  },
+);
+
+test('ревью кода: только завершить или отменить, без коммита', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const stand = makeServerStand();
+  const config = loadServerConfig(stand.configFile);
+  const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: stand.root, encoding: 'utf8' }).trim();
+  const run = waitingRunFixture(stand.dataDir, stand.root, {
+    next: 'gate2',
+    mode: 'review',
+    baseCommit,
+    tests: [],
+    reviews: [
+      {
+        at: '1',
+        blocking: [{ file: 'src/math.js', line: 1, message: 'Блокирующее замечание' }],
+        notes: [{ file: null, line: null, message: 'Заметка ревьюера' }],
+      },
+    ],
+  });
+  const fixture = await startTestHost({ dataDir: stand.dataDir, settings: config.settings, project: stand.project });
+  t.after(() => fixture.close());
+  const origin = await listen(t, createServerApp(config, fixture.host));
+  const browser = new Browser();
+  assert.equal((await browser.login(origin)).status, 303);
+
+  const page = await (await browser.request(origin, `/runs/${run.id}`)).text();
+  assert.match(page, /Блокирующее замечание/);
+  assert.match(page, /Заметка ревьюера/);
+  assert.match(page, /Проверка не запускалась/);
+  assert.match(page, /Завершить разбор/);
+  assert.match(page, /Отменить/);
+  assert.ok(!page.includes('Вернуть с комментарием'));
+
+  const withRunLock = t.mock.method(fixture.core.kernel, 'withRunLock');
+  const rejected = await postDecision(browser, origin, run.id, {
+    expectedWaitId: run.waitId!,
+    action: 'reject',
+    comment: 'Недопустимый возврат',
+  });
+  assert.equal(rejected.status, 400);
+  assert.equal(withRunLock.mock.callCount(), 0);
+
+  const commitsBefore = execFileSync('git', ['rev-list', '--count', run.branch], { cwd: stand.root, encoding: 'utf8' }).trim();
+  const approved = await postDecision(browser, origin, run.id, { expectedWaitId: run.waitId!, action: 'approve' });
+  assert.equal(approved.status, 303);
+  const finished = (await fixture.core.getRun(run.id))!;
+  assert.equal(finished.status, 'finished');
+  assert.equal(finished.commit, undefined);
+  const commitsAfter = execFileSync('git', ['rev-list', '--count', run.branch], { cwd: stand.root, encoding: 'utf8' }).trim();
+  assert.equal(commitsAfter, commitsBefore);
+});

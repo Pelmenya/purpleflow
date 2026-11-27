@@ -11,10 +11,7 @@ function decisionForm(run: RunFile, waitId: string, action: string, label: strin
 
 function reviewItems(title: string, items: ReviewItem[]): string {
   const list = items
-    .map(
-      (item) =>
-        `<li><span>${escapeHtml(item.file ?? '—')}:${item.line ?? '—'}</span><pre>${escapeHtml(item.message)}</pre></li>`,
-    )
+    .map((item) => `<li><span>${escapeHtml(item.file ?? '—')}:${item.line ?? '—'}</span><pre>${escapeHtml(item.message)}</pre></li>`)
     .join('');
   return `<h4>${title}</h4>${list ? `<ul>${list}</ul>` : '<p>Нет замечаний.</p>'}`;
 }

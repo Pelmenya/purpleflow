@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -121,10 +122,12 @@ test('план: пустой возврат и чужой прогон', { skip:
   assert.equal(foreignPage.status, 404);
   assert.equal(readDocs.mock.callCount(), 0);
 
-  const gate2 = waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate2' });
+  const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.project.path, encoding: 'utf8' }).trim();
+  const gate2 = waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate2', baseCommit });
   const gate2Page = await (await fixture.browser.request(fixture.origin, `/runs/${gate2.id}`)).text();
   assert.match(gate2Page, /Посмотрите дифф и замечания ревью/);
-  assert.doesNotMatch(gate2Page, /name="action"/);
+  assert.match(gate2Page, /name="action" value="approve"/);
+  assert.match(gate2Page, /name="action" value="reject"/);
 });
 
 test('план: повтор формы после обрыва', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {

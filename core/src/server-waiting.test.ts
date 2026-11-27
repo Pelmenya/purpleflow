@@ -92,7 +92,7 @@ test('ожидания: недопустимое действие и пусто�
   fixture.core.kernel.store.save({ ...before, next: 'gate2' });
   const gate2 = await postDecision(fixture.browser, fixture.origin, fixture.runId, {
     expectedWaitId: fixture.waiting.waitId!,
-    action: 'approve',
+    action: 'cancel',
   });
   assert.equal(gate2.status, 400);
   assert.deepEqual((await fixture.core.getRun(fixture.runId))!.gates, before.gates);

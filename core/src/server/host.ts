@@ -313,7 +313,8 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
           try {
             diff = await runningCore.getDiff(id);
           } catch (error) {
-            return (await readRun(id)) ? Promise.reject(error) : null;
+            if (!(await readRun(id))) return null;
+            throw error;
           }
           const current = await readRun(id);
           if (!current) return null;
@@ -346,9 +347,13 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
             ? command.action === 'answer' || command.action === 'skip'
             : snapshot.next === 'gate1'
               ? command.action === 'approve' || command.action === 'reject' || command.action === 'cancel'
-              : snapshot.next === 'limit'
-                ? command.action === 'approve' || command.action === 'cancel'
-                : false;
+              : snapshot.next === 'gate2'
+                ? snapshot.mode === 'review'
+                  ? command.action === 'approve' || command.action === 'cancel'
+                  : command.action === 'approve' || command.action === 'reject'
+                : snapshot.next === 'limit'
+                  ? command.action === 'approve' || command.action === 'cancel'
+                  : false;
         if (!actionAllowed) return { status: 'invalid', message: 'Действие недопустимо для текущего ожидания' };
         if (command.action === 'answer' && (!command.answers.length || command.answers.some(({ q, a }) => !q.trim() || !a.trim()))) {
           return { status: 'invalid', message: 'Ответьте на каждый вопрос' };
