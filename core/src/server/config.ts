@@ -179,13 +179,12 @@ function projectsAt(file: string, value: unknown): ServerConfig['projects'] {
       if (value !== undefined && typeof value !== 'string') invalid(file, `${field}.${key}`, 'ожидалась строка');
       return value as string | undefined;
     };
-    return {
-      id,
-      path: absolutePath(file, project.path, `${field}.path`),
-      testCommand: command('testCommand'),
-      setupCommand: command('setupCommand'),
-      lintCommand: command('lintCommand'),
-    };
+    const result: ServerProject = { id, path: absolutePath(file, project.path, `${field}.path`) };
+    for (const key of ['testCommand', 'setupCommand', 'lintCommand'] as const) {
+      const value = command(key);
+      if (value !== undefined) result[key] = value;
+    }
+    return result;
   });
 }
 

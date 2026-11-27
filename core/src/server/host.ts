@@ -142,12 +142,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
         throw error;
       }
     };
-    const performStartTask = async (
-      projectId: string,
-      task: string,
-      submissionId: string,
-      hash: string,
-    ): Promise<StartTaskResult> => {
+    const performStartTask = async (projectId: string, task: string, submissionId: string, hash: string): Promise<StartTaskResult> => {
       const existing = await readSubmission(submissionId);
       if (existing) {
         if (existing.hash !== hash) return { status: 'conflict' };

@@ -49,8 +49,7 @@ function logoutForm(): string {
 function overviewPage(snapshot: HostSnapshot): string {
   const projects = snapshot.projects
     .map(
-      (project) =>
-        `<li data-project-id="${escapeHtml(project.id)}"><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
+      (project) => `<li data-project-id="${escapeHtml(project.id)}"><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
     )
     .join('');
   const runs = snapshot.runs
@@ -76,7 +75,8 @@ function startResultPage(result: StartTaskResult, projectId: string): string {
   if (result.status === 'rejected') {
     return `<h1>Задача не запущена</h1><p>${escapeHtml(result.message)}</p><p><a href="/projects/${projectId}">Вернуться к задаче</a></p>`;
   }
-  const message = result.status === 'conflict' ? 'Этот идентификатор уже использован для другой задачи' : 'Исход предыдущего запуска неизвестен';
+  const message =
+    result.status === 'conflict' ? 'Этот идентификатор уже использован для другой задачи' : 'Исход предыдущего запуска неизвестен';
   return `<h1>Задача не запущена повторно</h1><p>${message}</p><p><a href="/">Проверьте список прогонов</a></p>`;
 }
 
@@ -235,7 +235,12 @@ export function createServerApp(
         methods ? { Allow: methods.join(', ') } : {},
       );
     } catch (error) {
-      if (!res.headersSent) send(res, error instanceof ShuttingDownError ? 503 : 500, error instanceof ShuttingDownError ? 'Служба останавливается' : 'Внутренняя ошибка');
+      if (!res.headersSent)
+        send(
+          res,
+          error instanceof ShuttingDownError ? 503 : 500,
+          error instanceof ShuttingDownError ? 'Служба останавливается' : 'Внутренняя ошибка',
+        );
       else res.destroy();
     }
   };
