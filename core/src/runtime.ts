@@ -13,7 +13,7 @@ export interface CoreOptions {
   env: NodeJS.ProcessEnv;
   getSettings: () => CoreSettings;
   allowProject?: (projectPath: string) => boolean;
-  /** Сервер сохраняет запись прогона, если человек остановил первоначальную подготовку. */
+  /** Сервер сохраняет запись прогона при ручной остановке или ошибке первоначальной подготовки. */
   keepFailedStart?: boolean;
   /** Подмена агентов — для тестов конвейера без настоящих claude и codex. */
   runners?: { claude?: typeof runClaude; codex?: typeof runCodex; opencode?: typeof runOpencode; agy?: typeof runAgy };

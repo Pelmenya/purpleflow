@@ -12,6 +12,8 @@ import type { Host, HostSnapshot, StartTaskResult } from './host.js';
 import type { ExpectedDecision } from './decisions.js';
 import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './session.js';
 import type { Sessions } from './session.js';
+import { startTelegram } from './telegram.js';
+import type { TelegramHandle } from './telegram.js';
 
 export interface Service {
   ready: Promise<void>;
@@ -48,6 +50,14 @@ function loginPage(returnTo: string, error = ''): string {
 
 function logoutForm(): string {
   return '<form method="post" action="/logout"><button type="submit">Выйти</button></form>';
+}
+
+function settingsPage(telegram?: TelegramHandle, notice = ''): string {
+  if (!telegram) return '<h1>Настройки</h1><p>Telegram не подключён.</p>';
+  const status = telegram.status();
+  const delivery = status.lastDeliveredAt ? `<p>Последняя доставка: ${escapeHtml(new Date(status.lastDeliveredAt).toISOString())}</p>` : '';
+  const error = status.lastError ? `<p>Последняя ошибка: ${escapeHtml(status.lastError)}</p>` : '';
+  return `<h1>Настройки</h1><p>Telegram подключён.</p>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${delivery}${error}<form method="post" action="/settings/telegram/probe"><button type="submit">Отправить пробное сообщение</button></form><p>При обрыве ответа или перезапуске между ответом Telegram и сохранением доставки возможен один повтор сообщения.</p>`;
 }
 
 function overviewPage(snapshot: HostSnapshot): string {
@@ -247,11 +257,13 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
   ['/api/overview', readMethods],
   ['/login', ['GET', 'POST']],
   ['/logout', ['POST']],
+  ['/settings', readMethods],
+  ['/settings/telegram/probe', ['POST']],
 ]);
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
 registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+\/chats$/);
 registerReturnRoute(/^\/chats\/[A-Za-z0-9_-]+$/);
-registerReturnRoute(/^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i);
+registerReturnRoute(/^\/settings$/);
 
 function allowedMethods(route: string): readonly string[] | undefined {
   if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route) || chatRoute.test(route) || chatApiRoute.test(route))
@@ -268,6 +280,7 @@ export function createServerApp(
   opts: {
     now?: () => number;
     sessions?: Sessions;
+    telegram?: TelegramHandle;
     testHooks?: {
       beforeStartTask?: () => Promise<void>;
       beforeStartRedirect?: () => Promise<void>;
@@ -336,6 +349,31 @@ export function createServerApp(
         }
         sessions.logout(sessionToken(req));
         res.writeHead(303, { Location: '/', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
+        return;
+      }
+      if (route === '/settings' && method === 'GET') {
+        html(res, 200, settingsPage(opts.telegram));
+        return;
+      }
+      if (route === '/settings/telegram/probe' && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        if (!opts.telegram) {
+          send(res, 409, 'Telegram не подключён');
+          return;
+        }
+        try {
+          const result = await opts.telegram.probe();
+          html(
+            res,
+            200,
+            settingsPage(opts.telegram, result.ok ? 'Пробное сообщение доставлено.' : `Проба не доставлена: ${result.error ?? 'ошибка'}`),
+          );
+        } catch (error) {
+          send(res, 503, error instanceof Error ? error.message : 'Уведомления останавливаются');
+        }
         return;
       }
       if (route === '/' && method === 'GET') {
@@ -540,12 +578,14 @@ export function createServerApp(
 
 export async function startService(
   config: ServerConfig,
-  deps: { startHost?: typeof startServerHost; now?: () => number } = {},
+  deps: { startHost?: typeof startServerHost; startTelegram?: typeof startTelegram; now?: () => number } = {},
 ): Promise<Service> {
   const now = deps.now;
   const sessions = createSessions({ secret: readSecret(config.secretFile), now });
+  const telegramToken = config.telegram ? readSecret(config.telegram.tokenFile) : undefined;
   const agentEnv = buildAgentEnv();
   const starter = deps.startHost ?? startServerHost;
+  const startNotifications = deps.startTelegram ?? startTelegram;
   let handler: RequestListener = (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -567,7 +607,21 @@ export async function startService(
     server.listen(config.port, '127.0.0.1');
   });
 
+  let serverClosePromise: Promise<void> | undefined;
+  const closeServer = (): Promise<void> => {
+    if (serverClosePromise) return serverClosePromise;
+    serverClosePromise = new Promise<void>((resolve, reject) => {
+      if (!server.listening) {
+        resolve();
+        return;
+      }
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+    return serverClosePromise;
+  };
+
   let stopping = false;
+  let telegram: TelegramHandle | undefined;
   const launching = Promise.resolve().then(() =>
     starter({
       dataDir: config.dataDir,
@@ -577,26 +631,50 @@ export async function startService(
       agentEnv,
     }),
   );
-  const ready = launching.then((host) => {
+  const ready = launching.then(async (host) => {
     if (stopping) return new Promise<void>(() => {});
-    handler = createServerApp(config, host, { sessions, now });
+    try {
+      if (config.telegram && telegramToken !== undefined) {
+        telegram = startNotifications({
+          dataDir: host.dataDir,
+          token: telegramToken,
+          chatId: config.telegram.chatId,
+          apiBase: config.telegram.apiBase,
+          publicOrigin: config.publicOrigin,
+          host,
+          now,
+        });
+      }
+      handler = createServerApp(config, host, { sessions, now, telegram });
+    } catch (error) {
+      if (telegram) await telegram.stop().catch(() => {});
+      await host.close().catch(() => {});
+      server.closeAllConnections();
+      await closeServer().catch(() => {});
+      throw error;
+    }
   });
   let stopPromise: Promise<void> | undefined;
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopping = true;
-    const serverClosed = new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    const serverClosed = closeServer();
     stopPromise = (async () => {
       let firstError: unknown;
       try {
         const host = await launching.catch(() => undefined);
         if (host) {
+          if (telegram) {
+            try {
+              await telegram.stop();
+            } catch (error) {
+              firstError = error;
+            }
+          }
           try {
             await host.close();
           } catch (error) {
-            firstError = error;
+            firstError ??= error;
           }
         }
       } finally {

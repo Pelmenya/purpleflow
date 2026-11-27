@@ -2,6 +2,9 @@
 
 import type { AgentKind, Efforts, Models, Role } from './settings.js';
 import type { ForgeKind, PrFollowupItem } from './pr.js';
+import type { FinishReason } from './protocol.js';
+
+export type StopRecord = { reason: FinishReason; at: string; id: string };
 
 export type StageId =
   'baseline' | 'clarify' | 'gate0' | 'plan' | 'gate1' | 'implement' | 'tests' | 'visual' | 'review' | 'gate2' | 'limit' | 'finish';
@@ -317,6 +320,7 @@ export interface RunFile {
   waitDecided?: true;
   /** Вопрос человеку или причина остановки. */
   message?: string;
+  stop?: StopRecord;
   attempts: StageAttempt[];
   planRetries: number;
   implAttemptsUsed: number;

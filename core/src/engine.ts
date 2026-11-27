@@ -22,6 +22,7 @@ import { removeRepoWorktrees, multiRepoOf } from './services/repos.js';
 import { runsWithFiles } from './services/runs.js';
 import { copyEnvFiles, ensureOnBranch, prepareWorkspace } from './services/workspace.js';
 import { isGate } from './stage-info.js';
+import { stopRecord } from './stop-record.js';
 import { needsReview, stageBaseline, stageTests, startNextPhase } from './stages/checks.js';
 import { stageFinish } from './stages/finish.js';
 import { stageImplement } from './stages/implement.js';
@@ -100,6 +101,7 @@ export async function recover(k: Kernel): Promise<void> {
     }
     if (r.message?.startsWith('Изменения прогона остались в git stash')) {
       r.status = 'stopped';
+      r.stop = stopRecord('stage_failed');
     } else {
       // Прогон продолжится сам — в очереди, с учётом лимита одновременных прогонов.
       r.status = 'queued';
@@ -280,7 +282,11 @@ export async function start(k: Kernel, input: StartRunInput): Promise<string> {
       k.markStopped(run, USER_STOP_MESSAGE);
       return run.id;
     }
-    // Рабочую копию создать не удалось (грязная копия, ветка уже есть…) — прогона нет, ошибка уходит в окно.
+    if (k.opts.keepFailedStart) {
+      k.markStopped(run, `Не удалось начать прогон: ${(e as Error).message || String(e)}`, 'start_failed');
+      return run.id;
+    }
+    // Без keepFailedStart рабочая копия не создалась — прогона нет, ошибка уходит в окно.
     k.store.forget(run.id);
     k.emit({ type: 'run.deleted', runId: run.id });
     throw e;
@@ -379,11 +385,8 @@ export async function launchQueued(k: Kernel, run: RunFile) {
   } catch (e) {
     if (k.closing || k.deleted.has(run.id)) return;
     if (k.stopping.delete(run.id)) return k.markStopped(run, USER_STOP_MESSAGE);
-    run.status = 'stopped';
-    run.message = `Не удалось начать прогон: ${(e as Error).message}`;
-    k.save(run);
-    k.emit({ type: 'run.finished', runId: run.id, status: 'stopped', message: run.message, reason: 'start_failed' });
-    return;
+    const message = `Не удалось начать прогон: ${(e as Error).message}`;
+    return k.markStopped(run, message, 'start_failed');
   } finally {
     k.preparing.delete(run.id);
   }
@@ -435,6 +438,7 @@ export async function restore(k: Kernel, id: string) {
   if (r.workspace !== 'branch' && (r.worktreeRemoved || !fs.existsSync(r.worktreePath)))
     throw new Error('Рабочая копия прогона уже удалена при очистке хранилища — восстановить нельзя. Запустите задачу заново.');
   r.status = 'stopped';
+  r.stop = undefined;
   r.finishedAt = undefined;
   r.message = 'Восстановлен после отмены';
   k.log(r, c.violet('↺ прогон восстановлен после отмены') + '\n');
@@ -461,6 +465,7 @@ export async function stop(k: Kernel, id: string, { background = true }: { backg
     k.basePrep.delete(id);
     if (queued) {
       r.status = 'stopped';
+      r.stop = stopRecord('unqueued');
       r.message = UNQUEUED_MESSAGE;
       k.save(r);
     }
@@ -482,6 +487,7 @@ export async function stop(k: Kernel, id: string, { background = true }: { backg
       for (const a of fresh.attempts)
         if (a.stage === 'baseline' && a.status === 'running') Object.assign(a, { status: 'stopped', endedAt: new Date().toISOString() });
       fresh.status = 'stopped';
+      fresh.stop = stopRecord('user_stop');
       fresh.message = USER_STOP_MESSAGE;
       k.save(fresh);
       k.emit({ type: 'run.finished', runId: id, status: 'stopped', message: fresh.message, reason: 'user_stop' });

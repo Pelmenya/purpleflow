@@ -7,6 +7,7 @@ import { acceptTarget } from './route.js';
 import { stopPreview } from './services/preview.js';
 import { getChangeDocs } from './services/runs.js';
 import { STAGE_TITLES, isGate } from './stage-info.js';
+import { stopRecord } from './stop-record.js';
 import { mapFilesToPlan, summarizeChanges } from './stages/review.js';
 import { traced } from './trace.js';
 import type { Feedback, GateId, LineComment, RunFile } from './types.js';
@@ -143,6 +144,7 @@ async function applyDecision(
   if (decision === 'cancel') {
     if (gate === 'limit') {
       r.status = 'stopped';
+      r.stop = stopRecord('limit_stop');
       r.message = 'Остановлено после исчерпания попыток';
     } else {
       r.status = 'cancelled';

@@ -208,6 +208,7 @@ test('обзор: название прогона с <script> выводится
   const root = tempRoot(t);
   const config = configFor(root, path.join(root, 'project'));
   const host: Host = {
+    dataDir: config.dataDir,
     async snapshot() {
       return {
         projects: [{ id: 'project', name: 'Проект <img src=x onerror=alert(1)>' }],
@@ -242,6 +243,12 @@ test('обзор: название прогона с <script> выводится
     },
     async readRun() {
       return null;
+    },
+    intents() {
+      return [];
+    },
+    onIntentChange() {
+      return () => {};
     },
     async readLog() {
       return null;
@@ -377,6 +384,7 @@ async function assertPortFree(port: number): Promise<void> {
 
 function stubHost(overrides: Partial<Host> = {}): Host {
   return {
+    dataDir: '/nonexistent',
     async snapshot() {
       return { projects: [], runs: [] };
     },
@@ -400,6 +408,12 @@ function stubHost(overrides: Partial<Host> = {}): Host {
     },
     async readRun() {
       return null;
+    },
+    intents() {
+      return [];
+    },
+    onIntentChange() {
+      return () => {};
     },
     async readLog() {
       return null;

@@ -26,6 +26,12 @@ export interface ServerProject {
   lintCommand?: string;
 }
 
+export interface TelegramConfig {
+  tokenFile: string;
+  chatId: string | number;
+  apiBase?: string;
+}
+
 export interface ServerConfig {
   dataDir: string;
   promptsDir: string;
@@ -33,12 +39,13 @@ export interface ServerConfig {
   publicOrigin: string;
   port: number;
   secretFile: string;
+  telegram?: TelegramConfig;
   settings: CoreSettings;
 }
 
 type JsonObject = Record<string, unknown>;
 
-const ROOT_KEYS = ['dataDir', 'promptsDir', 'projects', 'publicOrigin', 'port', 'secretFile', 'settings'];
+const ROOT_KEYS = ['dataDir', 'promptsDir', 'projects', 'publicOrigin', 'port', 'secretFile', 'telegram', 'settings'];
 const SETTINGS_KEYS = [
   'toolPaths',
   'models',
@@ -200,6 +207,34 @@ function publicOriginAt(file: string, value: unknown): string {
   return value;
 }
 
+function telegramAt(file: string, value: unknown): TelegramConfig {
+  const raw = objectAt(file, value, 'telegram');
+  rejectUnknownKeys(file, raw, ['tokenFile', 'chatId', 'apiBase'], 'telegram');
+  const chatId = raw.chatId;
+  if ((typeof chatId !== 'string' || !chatId.trim()) && (typeof chatId !== 'number' || !Number.isInteger(chatId))) {
+    invalid(file, 'telegram.chatId', 'ожидалась непустая строка или целое число');
+  }
+  let apiBase: string | undefined;
+  if (raw.apiBase !== undefined) {
+    if (typeof raw.apiBase !== 'string') invalid(file, 'telegram.apiBase', 'ожидался HTTP origin');
+    let url: URL;
+    try {
+      url = new URL(raw.apiBase);
+    } catch {
+      invalid(file, 'telegram.apiBase', 'ожидался HTTP origin');
+    }
+    if (!['https:', 'http:'].includes(url.protocol) || url.origin !== raw.apiBase) {
+      invalid(file, 'telegram.apiBase', 'ожидался HTTP origin без пути, запроса и учётных данных');
+    }
+    apiBase = raw.apiBase;
+  }
+  return {
+    tokenFile: absolutePath(file, raw.tokenFile, 'telegram.tokenFile'),
+    chatId: chatId as string | number,
+    apiBase,
+  };
+}
+
 export function loadServerConfig(file: string): ServerConfig {
   const text = fs.readFileSync(file, 'utf8');
   let parsed: unknown;
@@ -222,6 +257,7 @@ export function loadServerConfig(file: string): ServerConfig {
     publicOrigin: publicOriginAt(file, raw.publicOrigin),
     port: integerAt(file, raw.port, 'port', 1, 65535),
     secretFile: absolutePath(file, raw.secretFile, 'secretFile'),
+    ...(raw.telegram === undefined ? {} : { telegram: telegramAt(file, raw.telegram) }),
     settings,
   };
 }
