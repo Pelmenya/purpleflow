@@ -35,7 +35,7 @@ function submissionIdOf(html: string): string {
 }
 
 function postTask(browser: Browser, origin: string, submissionId: string, task = 'Добавь mul', signal?: AbortSignal) {
-  return browser.request(origin, '/projects/p1/runs', {
+  return browser.request(origin, '/legacy/projects/p1/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, task }),
@@ -77,17 +77,17 @@ test('старт: задача из браузера продолжается п
   const clientB = new Browser();
 
   try {
-    const anonymous = await clientA.request(origin, '/projects/p1');
+    const anonymous = await clientA.request(origin, '/legacy/projects/p1');
     assert.equal(anonymous.status, 303);
     const loginLocation = new URL(anonymous.headers.get('location') ?? '', origin);
-    assert.equal(loginLocation.searchParams.get('returnTo'), '/projects/p1');
-    const entered = await clientA.login(origin, '/projects/p1');
+    assert.equal(loginLocation.searchParams.get('returnTo'), '/legacy/projects/p1');
+    const entered = await clientA.login(origin, '/legacy/projects/p1');
     assert.equal(entered.status, 303);
-    assert.equal(entered.headers.get('location'), '/projects/p1');
+    assert.equal(entered.headers.get('location'), '/legacy/projects/p1');
 
-    const overview = await (await clientA.request(origin, '/')).text();
-    assert.match(overview, /href="\/projects\/p1"/);
-    const form = await clientA.request(origin, '/projects/p1');
+    const overview = await (await clientA.request(origin, '/legacy/')).text();
+    assert.match(overview, /href="\/legacy\/projects\/p1"/);
+    const form = await clientA.request(origin, '/legacy/projects/p1');
     assert.equal(form.status, 200);
     const submissionId = submissionIdOf(await form.text());
     const controller = new AbortController();
@@ -111,7 +111,7 @@ test('старт: задача из браузера продолжается п
     await untilGate(fixture.core, runId, 'gate1');
 
     await clientB.login(origin);
-    const page = await clientB.request(origin, `/runs/${runId}`);
+    const page = await clientB.request(origin, `/legacy/runs/${runId}`);
     assert.equal(page.status, 200);
     const html = await page.text();
     assert.match(html, new RegExp(runId));
@@ -236,7 +236,7 @@ test('старт: повтор после обрыва ответа даёт о�
   assert.equal(runs.length, 1);
   const repeated = await postTask(browser, origin, submissionId);
   assert.equal(repeated.status, 303);
-  assert.equal(repeated.headers.get('location'), `/runs/${runs[0]!.id}`);
+  assert.equal(repeated.headers.get('location'), `/legacy/runs/${runs[0]!.id}`);
   assert.equal(starts.length, 1);
   assert.equal((await fixture.core.listRuns()).length, 1);
 });
@@ -270,7 +270,7 @@ test('старт: повтор после удаления прогона без
   const repeated = await postTask(browser, origin, submissionId);
 
   assert.equal(repeated.status, 409);
-  assert.match(await repeated.text(), /href="\/"/);
+  assert.match(await repeated.text(), /href="\/legacy\/"/);
   assert.equal(await fixture.core.getRun(runId), null);
   assert.equal(starts.length, 1);
   assert.deepEqual(await fixture.core.listRuns(), []);
@@ -326,7 +326,7 @@ test('старт: повтор того же ключа после рестар�
 });
 
 function postProjectTask(browser: Browser, origin: string, projectId: string, submissionId: string, task = 'Добавь mul') {
-  return browser.request(origin, `/projects/${projectId}/runs`, {
+  return browser.request(origin, `/legacy/projects/${projectId}/runs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, task }),
@@ -415,7 +415,7 @@ test('старт: чужой прогон по id', { skip: serverTestsSkip, tim
   t.after(() => second.close());
   assert.equal(await second.host.readRun(runId), null);
   const { browser, origin } = await appFor(t, second);
-  const page = await browser.request(origin, `/runs/${runId}`);
+  const page = await browser.request(origin, `/legacy/runs/${runId}`);
   assert.equal(page.status, 404);
 });
 

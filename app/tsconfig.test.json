@@ -3,6 +3,7 @@
   "compilerOptions": { "noEmit": true, "types": ["node"] },
   "include": [
     "src/renderer/src/**/*.test.ts",
+    "src/web/**/*.test.ts",
     "src/shared/urls.ts",
     "src/shared/urls.test.ts",
     "src/shared/update.ts",

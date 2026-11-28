@@ -39,13 +39,14 @@ export interface ServerConfig {
   publicOrigin: string;
   port: number;
   secretFile: string;
+  webDir?: string;
   telegram?: TelegramConfig;
   settings: CoreSettings;
 }
 
 type JsonObject = Record<string, unknown>;
 
-const ROOT_KEYS = ['dataDir', 'promptsDir', 'projects', 'publicOrigin', 'port', 'secretFile', 'telegram', 'settings'];
+const ROOT_KEYS = ['dataDir', 'promptsDir', 'projects', 'publicOrigin', 'port', 'secretFile', 'webDir', 'telegram', 'settings'];
 const SETTINGS_KEYS = [
   'toolPaths',
   'models',
@@ -319,6 +320,7 @@ export function loadServerConfig(file: string): ServerConfig {
     publicOrigin: publicOriginAt(file, raw.publicOrigin),
     port: integerAt(file, raw.port, 'port', 1, 65535),
     secretFile: absolutePath(file, raw.secretFile, 'secretFile'),
+    ...(raw.webDir === undefined ? {} : { webDir: absolutePath(file, raw.webDir, 'webDir') }),
     ...(raw.telegram === undefined ? {} : { telegram: telegramAt(file, raw.telegram) }),
     settings,
   };

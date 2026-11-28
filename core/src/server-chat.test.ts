@@ -75,9 +75,9 @@ async function hostFixture(
 }
 
 async function createChat(browser: Browser, origin: string, projectId = 'p1'): Promise<string> {
-  const page = await browser.request(origin, `/projects/${projectId}/chats`);
+  const page = await browser.request(origin, `/legacy/projects/${projectId}/chats`);
   assert.equal(page.status, 200);
-  const response = await browser.request(origin, `/projects/${projectId}/chats`, {
+  const response = await browser.request(origin, `/legacy/projects/${projectId}/chats`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(),
@@ -96,7 +96,7 @@ function postMessage(
   text: string,
   signal?: AbortSignal,
 ): Promise<Response> {
-  return browser.request(origin, `/chats/${chatId}/messages`, {
+  return browser.request(origin, `/legacy/chats/${chatId}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, text }),
@@ -130,12 +130,12 @@ test('чат: закрыть клиент до ответа и продолжи�
   assert.equal((await postMessage(firstClient, fixture.origin, chatId, firstSubmission, 'Первый вопрос')).status, 303);
 
   const secondClient = new Browser();
-  assert.equal((await secondClient.login(fixture.origin, `/chats/${chatId}`)).status, 303);
+  assert.equal((await secondClient.login(fixture.origin, `/legacy/chats/${chatId}`)).status, 303);
   await until(
     () => readApi(secondClient, fixture.origin, chatId),
     (view) => view.busy && view.chat.messages.some((message) => message.role === 'user' && message.text === 'Первый вопрос'),
   );
-  const busyPage = await secondClient.request(fixture.origin, `/chats/${chatId}`);
+  const busyPage = await secondClient.request(fixture.origin, `/legacy/chats/${chatId}`);
   const busyHtml = await busyPage.text();
   assert.match(busyHtml, /<meta http-equiv="refresh" content="2">/);
   assert.match(busyHtml, /<fieldset disabled>[\s\S]*<textarea[^>]*name="text"[\s\S]*<button[^>]*type="submit"[\s\S]*<\/fieldset>/);
@@ -145,7 +145,7 @@ test('чат: закрыть клиент до ответа и продолжи�
     () => readApi(secondClient, fixture.origin, chatId),
     (view) => !view.busy && view.chat.messages.some((message) => message.role === 'assistant' && !message.pending),
   );
-  const readyPage = await secondClient.request(fixture.origin, `/chats/${chatId}`);
+  const readyPage = await secondClient.request(fixture.origin, `/legacy/chats/${chatId}`);
   const readyHtml = await readyPage.text();
   assert.doesNotMatch(readyHtml, /http-equiv="refresh"/);
   assert.doesNotMatch(readyHtml, /<fieldset disabled/);
@@ -185,7 +185,7 @@ test('чат: создание и остановка службы', chatTest, as
 
   const third = await hostFixture(t);
   const thirdClosing = third.close();
-  const response = await third.browser.request(third.origin, '/projects/p1/chats', {
+  const response = await third.browser.request(third.origin, '/legacy/projects/p1/chats', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(),
@@ -202,21 +202,21 @@ test('чат: недоступные чаты', chatTest, async (t) => {
   const foreignPath = makeRepo();
   const foreign = await fixture.core.createChat({ projectPath: foreignPath, agent: 'claude', edits: false });
 
-  const listPage = await fixture.browser.request(fixture.origin, '/projects/p1/chats');
+  const listPage = await fixture.browser.request(fixture.origin, '/legacy/projects/p1/chats');
   const listHtml = await listPage.text();
-  assert.match(listHtml, new RegExp(`/chats/${allowed}`));
+  assert.match(listHtml, new RegExp(`/legacy/chats/${allowed}`));
   for (const chat of [desktop, withoutProject, foreign]) assert.doesNotMatch(listHtml, new RegExp(chat.id));
 
   for (const chat of [desktop, withoutProject, foreign]) {
     assert.equal(await fixture.host.readChat(chat.id), null);
-    assert.equal((await fixture.browser.request(fixture.origin, `/chats/${chat.id}`)).status, 404);
+    assert.equal((await fixture.browser.request(fixture.origin, `/legacy/chats/${chat.id}`)).status, 404);
     assert.equal((await fixture.browser.request(fixture.origin, `/api/chats/${chat.id}`)).status, 404);
     assert.equal((await postMessage(fixture.browser, fixture.origin, chat.id, crypto.randomUUID(), 'вопрос')).status, 404);
   }
-  assert.equal((await fixture.browser.request(fixture.origin, '/projects/missing/chats')).status, 404);
+  assert.equal((await fixture.browser.request(fixture.origin, '/legacy/projects/missing/chats')).status, 404);
   assert.equal(
     (
-      await fixture.browser.request(fixture.origin, '/projects/missing/chats', {
+      await fixture.browser.request(fixture.origin, '/legacy/projects/missing/chats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams(),
@@ -279,7 +279,7 @@ test('чат: исход неизвестен после сбоя', chatTest, as
   assert.equal(response.status, 409);
   const html = await response.text();
   assert.match(html, /Исход неизвестен/);
-  assert.match(html, new RegExp(`href="/chats/${chatId}"`));
+  assert.match(html, new RegExp(`href="/legacy/chats/${chatId}"`));
   assert.deepEqual((await readApi(fixture.browser, fixture.origin, chatId)).chat.messages, []);
   assert.equal(fakeTurns(fixture.stand).length, 0);
 });
@@ -408,7 +408,7 @@ test('чат: рестарт службы во время ответа', chatTes
   assert.equal(store.pidsTime(`chat:${chatId}`), undefined);
   const withoutProject = new Browser();
   assert.equal((await withoutProject.login(service.origin)).status, 303);
-  assert.equal((await withoutProject.request(service.origin, `/chats/${chatId}`)).status, 404);
+  assert.equal((await withoutProject.request(service.origin, `/legacy/chats/${chatId}`)).status, 404);
   assert.equal((await withoutProject.request(service.origin, `/api/chats/${chatId}`)).status, 404);
   await service.stop();
 
@@ -416,7 +416,7 @@ test('чат: рестарт службы во время ответа', chatTes
   fs.writeFileSync(stand.configFile, JSON.stringify(config));
   service = await spawnChatService(stand);
   const client = new Browser();
-  assert.equal((await client.login(service.origin, `/chats/${chatId}`)).status, 303);
+  assert.equal((await client.login(service.origin, `/legacy/chats/${chatId}`)).status, 303);
   const recovered = await readApi(client, service.origin, chatId);
   assert.equal(recovered.busy, false);
   assert.equal(
@@ -427,7 +427,7 @@ test('чат: рестарт службы во время ответа', chatTes
     recovered.chat.messages.some((message) => message.queued && message.text === 'ожидающий'),
     true,
   );
-  const page = await client.request(service.origin, `/chats/${chatId}`);
+  const page = await client.request(service.origin, `/legacy/chats/${chatId}`);
   const html = await page.text();
   assert.doesNotMatch(html, /http-equiv="refresh"/);
   assert.doesNotMatch(html, /<fieldset disabled/);

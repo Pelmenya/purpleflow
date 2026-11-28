@@ -3,6 +3,7 @@ import type { CoreEvent, RunFile } from '@purpleflow/core';
 import type { PublicSettings } from '../../../shared/ipc';
 import { bridge } from './api';
 import { chatSummary, reducer, type State, type View } from './reducer';
+import { pathToView, viewToPath } from './route-url';
 
 export type { ProjectTab, SettingsTab, State, View } from './reducer';
 
@@ -33,7 +34,7 @@ export function onCoreEvent(fn: (e: CoreEvent) => void): () => void {
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, {
-    view: { name: 'new' },
+    view: bridge.web ? pathToView(location.pathname, location.search) : { name: 'new' },
     settings: null,
     tools: null,
     toolsLoading: false,
@@ -42,6 +43,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     details: {},
     chats: [],
   });
+
+  useEffect(() => {
+    if (!bridge.web) return;
+    const path = viewToPath(state.view);
+    if (`${location.pathname}${location.search}` !== path) history.pushState(null, '', path);
+  }, [state.view]);
+
+  useEffect(() => {
+    if (!bridge.web) return;
+    const onPopState = () => dispatch({ t: 'view', view: pathToView(location.pathname, location.search) });
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
 
   const refreshTools = useCallback(async () => {
     dispatch({ t: 'tools', tools: null, loading: true });

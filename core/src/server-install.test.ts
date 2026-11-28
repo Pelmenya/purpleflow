@@ -12,6 +12,7 @@ import { buildAgentEnv, loadServerConfig } from './server/config.js';
 import type { ServerConfig } from './server/config.js';
 import { startHost } from './server/host.js';
 import { createServerApp } from './server/main.js';
+import { hashSecret } from './server/secret.js';
 import { Browser, listen, makeServerStand, serverTestsSkip } from './server-testkit.test.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -100,7 +101,7 @@ test('пример unit совпадает со сборкой', linuxOnly, () =
 
 function readExampleConfig(dir: string): { file: string; value: ReturnType<typeof installConfig> } {
   const secretFile = path.join(dir, 'secret');
-  fs.writeFileSync(secretFile, 'секрет владельца', { mode: 0o600 });
+  fs.writeFileSync(secretFile, hashSecret('секрет владельца'), { mode: 0o600 });
   const text = substituted(path.join(CHECKOUT, 'docs', 'server', 'config.example.json'), {
     __CHECKOUT__: CHECKOUT,
     __DATA_DIR__: path.join(dir, 'service-data'),
@@ -270,18 +271,18 @@ async function startBuiltService(t: TestContext, configFile: string, port: numbe
 }
 
 async function startRun(browser: Browser, origin: string): Promise<string> {
-  const project = await browser.request(origin, '/projects/p1');
+  const project = await browser.request(origin, '/legacy/projects/p1');
   assert.equal(project.status, 200);
   const submissionId = /name="submissionId" value="([0-9a-f-]+)"/.exec(await project.text())?.[1];
   assert.ok(submissionId);
-  const started = await browser.request(origin, '/projects/p1/runs', {
+  const started = await browser.request(origin, '/legacy/projects/p1/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, task: 'Добавь mul' }),
   });
   assert.equal(started.status, 303);
   const route = started.headers.get('location');
-  assert.ok(route && route.startsWith('/runs/'));
+  assert.ok(route && route.startsWith('/legacy/runs/'));
   return route;
 }
 

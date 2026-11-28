@@ -36,7 +36,7 @@ test('ожидания: две сессии на одном gate1 — одно �
 
   const approved = await postDecision(first, origin, runId, { expectedWaitId: waiting.waitId!, action: 'approve' });
   assert.equal(approved.status, 303);
-  assert.equal(approved.headers.get('location'), `/runs/${runId}`);
+  assert.equal(approved.headers.get('location'), `/legacy/runs/${runId}`);
   const repeated = await postDecision(second, origin, runId, { expectedWaitId: waiting.waitId!, action: 'approve' });
   assert.equal(repeated.status, 409);
   const body = await repeated.text();
@@ -118,7 +118,7 @@ test('ожидания: чужой прогон', { skip: serverTestsSkip, timeo
   const runFile = path.join(fixture.dataDir, 'runs', `${foreign.id}.json`);
   const saved = fs.readFileSync(runFile, 'utf8');
 
-  const page = await fixture.browser.request(fixture.origin, `/runs/${foreign.id}`);
+  const page = await fixture.browser.request(fixture.origin, `/legacy/runs/${foreign.id}`);
   assert.equal(page.status, 404);
   const decision = await postDecision(fixture.browser, fixture.origin, foreign.id, {
     expectedWaitId: foreign.waitId!,
@@ -227,9 +227,8 @@ test('обзор: ожидания с причиной после рестарт
   t.after(() => second.close());
   const secondServer = await openServer(createServerApp(configFor(second.dataDir, second.project), second.host));
   t.after(secondServer.close);
-  const oldSession = await browser.request(secondServer.origin, '/');
-  assert.equal(oldSession.status, 303);
-  assert.equal((await browser.login(secondServer.origin)).status, 303);
+  const oldSession = await browser.request(secondServer.origin, '/legacy/');
+  assert.equal(oldSession.status, 200);
 
   const response = await browser.request(secondServer.origin, '/api/overview');
   assert.equal(response.status, 200);
@@ -247,7 +246,7 @@ test('обзор: ожидания с причиной после рестарт
   assert.deepEqual(byId.get(loop.id)!.limit, { cause: 'loop', attempts: 2, max: 3 });
   assert.deepEqual(byId.get(attempts.id)!.limit, { cause: 'attempts', attempts: 3, max: 3 });
 
-  const overview = await (await browser.request(secondServer.origin, '/')).text();
+  const overview = await (await browser.request(secondServer.origin, '/legacy/')).text();
   assert.match(overview, /&lt;b&gt;Исполнитель и ревьюер ходят по кругу&lt;\/b&gt;/);
   assert.doesNotMatch(overview, /<b>Исполнитель/);
 

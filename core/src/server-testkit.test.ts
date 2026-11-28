@@ -14,6 +14,7 @@ import type { Orchestrator } from './orchestrator.js';
 import type { CoreOptions } from './runtime.js';
 import type { ServerConfig, ServerProject } from './server/config.js';
 import { startHost, type Host } from './server/host.js';
+import { hashSecret } from './server/secret.js';
 import { RunStore } from './store.js';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -24,7 +25,7 @@ const SECRET = 'секрет владельца';
 
 export function configFor(dataDir: string, project: ServerProject, settings?: CoreSettings): ServerConfig {
   const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   return {
     dataDir,
     promptsDir: PROMPTS,
@@ -74,6 +75,10 @@ export async function listen(t: TestContext, handler: http.RequestListener): Pro
 export class Browser {
   private cookie = '';
 
+  get sessionToken(): string {
+    return this.cookie.replace(/^pf_session=/, '');
+  }
+
   async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.cookie) headers.set('Cookie', this.cookie);
@@ -94,7 +99,7 @@ export class Browser {
 }
 
 export function postDecision(browser: Browser, origin: string, runId: string, fields: Record<string, string>): Promise<Response> {
-  return browser.request(origin, `/runs/${runId}/decision`, {
+  return browser.request(origin, `/legacy/runs/${runId}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields),
@@ -270,7 +275,7 @@ export function makeServerStand(opts: { testCommand?: string } = {}) {
 
   const project: ServerProject = { id: 'p1', path: root, testCommand: opts.testCommand ?? 'node --version' };
   const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   const configFile = path.join(sandbox, 'server.json');
   fs.writeFileSync(
     configFile,
@@ -299,6 +304,7 @@ export async function startTestHost(
     runners?: CoreOptions['runners'];
     settings?: CoreSettings;
     project?: Partial<ServerProject>;
+    agentEnv?: NodeJS.ProcessEnv;
     onCore?: (core: Orchestrator) => void;
   } = {},
 ): Promise<{
@@ -336,7 +342,7 @@ export async function startTestHost(
     promptsDir: PROMPTS,
     projects: [project],
     settings,
-    agentEnv: env,
+    agentEnv: opts.agentEnv ?? env,
     runners: opts.runners,
     onCore: (value) => {
       core = value;

@@ -19,6 +19,7 @@
 ```bash
 npm ci
 npm run build:core
+npm run build:web
 ```
 
 Создайте отдельные каталоги и секрет входа:
@@ -28,10 +29,12 @@ mkdir -p "$HOME/.config/purpleflow-server" "$HOME/.local/state/purpleflow-server
 chmod 700 "$HOME/.local/state/purpleflow-server"
 install -d -m 700 "$HOME/.local/state/purpleflow-server/data"
 test "$(stat -c '%a' "$HOME/.local/state/purpleflow-server/data")" = 700
-node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:crypto").randomBytes(32).toString("base64url") + "\n", { mode: 0o600 })' "$HOME/.config/purpleflow-server/secret"
+node core/dist/server/main.js hash-secret "$HOME/.config/purpleflow-server/secret"
 cp docs/server/config.example.json "$HOME/.config/purpleflow-server/config.json"
 chmod 600 "$HOME/.config/purpleflow-server/config.json"
 ```
+
+Команда `hash-secret` печатает секрет только один раз: сохраните его в менеджере паролей. В файле `secret` остаётся только хеш с солью. Команда не перезаписывает существующий файл.
 
 Отредактируйте `config.json` и замените все плейсхолдеры:
 
@@ -46,6 +49,29 @@ chmod 600 "$HOME/.config/purpleflow-server/config.json"
 Не используйте в `dataDir` ни `${XDG_CONFIG_HOME:-$HOME/.config}/PurpleFlow/data`, ни прежний `${XDG_CONFIG_HOME:-$HOME/.config}/PS Flow/data`: `loadServerConfig` отклонит совпадение, включая пути через симлинки. Если в окружении службы задана `PURPLEFLOW_USER_DATA`, отклоняется и её подкаталог `data`. Предел проверки: desktop, запущенный с `PURPLEFLOW_USER_DATA` в другом окружении, служба не видит. Поэтому не направляйте `dataDir` в профиль desktop даже при другом способе задания этого каталога.
 
 `publicOrigin` — точный HTTPS origin без пути, который откроется на телефоне. `port` — локальный порт для reverse proxy.
+
+### Переход с установки Ф5 и восстановление секрета
+
+Если файл `secret` остался от установки Ф5 и содержит открытый текст, переместите его, создайте новый, удалите старый и перезапустите службу:
+
+```bash
+mv "$HOME/.config/purpleflow-server/secret" "$HOME/.config/purpleflow-server/secret.old"
+node core/dist/server/main.js hash-secret "$HOME/.config/purpleflow-server/secret"
+rm -- "$HOME/.config/purpleflow-server/secret.old"
+systemctl --user restart purpleflow.service
+```
+
+Сохраните напечатанный секрет в менеджере паролей. После смены секрета все прежние сессии будут отозваны при следующем запуске.
+
+Если секрет утерян, удалите файл, создайте новый и перезапустите службу:
+
+```bash
+rm -- "$HOME/.config/purpleflow-server/secret"
+node core/dist/server/main.js hash-secret "$HOME/.config/purpleflow-server/secret"
+systemctl --user restart purpleflow.service
+```
+
+Это также отзовёт все прежние сессии. Служба не принимает файл секрета с открытым текстом.
 
 ## Вход агентов
 
@@ -166,7 +192,7 @@ purpleflow.example.com {
 }
 ```
 
-Перезапускайте Caddy штатными средствами сервера после изменения его конфигурации. Откройте `publicOrigin` с телефона и войдите секретом из `secret`.
+Перезапускайте Caddy штатными средствами сервера после изменения его конфигурации. Откройте `publicOrigin` с телефона и войдите секретом, который напечатала `hash-secret`.
 
 Для ручной приёмки:
 

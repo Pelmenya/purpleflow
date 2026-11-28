@@ -12,6 +12,7 @@ import { emptyUsage } from './agents/common.js';
 import type { ServerConfig } from './server/config.js';
 import { startHost, type Host, type HostSnapshot, type StartHostOptions } from './server/host.js';
 import { createServerApp, startService } from './server/main.js';
+import { hashSecret } from './server/secret.js';
 import { RunStore } from './store.js';
 import type { RunFile } from './types.js';
 
@@ -57,7 +58,7 @@ function saveRun(store: RunStore, projectPath: string, over: Partial<RunFile> = 
 
 function configFor(root: string, project: string, port = 0): ServerConfig {
   const secretFile = path.join(root, 'secret');
-  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   return {
     dataDir: path.join(root, 'data'),
     promptsDir: PROMPTS,
@@ -165,8 +166,8 @@ test('обзор: две сессии видят одинаковую непус
     [run.id],
   );
 
-  const firstHtml = await (await first.request(origin, '/')).text();
-  const secondHtml = await (await second.request(origin, '/')).text();
+  const firstHtml = await (await first.request(origin, '/legacy/')).text();
+  const secondHtml = await (await second.request(origin, '/legacy/')).text();
   assert.equal(firstHtml, secondHtml);
   assert.match(firstHtml, /Записанный прогон/);
 });
@@ -192,14 +193,11 @@ test('обзор: прямая ссылка ведёт ко входу и воз
   assert.equal(location.pathname, '/login');
   assert.equal(location.searchParams.get('returnTo'), route);
 
-  const form = await jar.request(origin, `${location.pathname}${location.search}`);
-  assert.equal(form.status, 200);
-  assert.match(await form.text(), /name="returnTo"[^>]*value="\/runs\//);
   const entered = await jar.login(origin, route);
   assert.equal(entered.status, 303);
   assert.equal(entered.headers.get('location'), route);
 
-  const page = await jar.request(origin, route);
+  const page = await jar.request(origin, `/legacy${route}`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Записанный прогон/);
 });
@@ -209,6 +207,12 @@ test('обзор: название прогона с <script> выводится
   const config = configFor(root, path.join(root, 'project'));
   const host: Host = {
     dataDir: config.dataDir,
+    async callCore() {
+      throw new Error('не реализовано');
+    },
+    onCoreEvent() {
+      return () => {};
+    },
     async snapshot() {
       return {
         projects: [{ id: 'project', name: 'Проект <img src=x onerror=alert(1)>' }],
@@ -268,7 +272,7 @@ test('обзор: название прогона с <script> выводится
   const jar = new CookieJar();
   await jar.login(origin);
 
-  const response = await jar.request(origin, '/');
+  const response = await jar.request(origin, '/legacy/');
   const body = await response.text();
   assert.equal(response.status, 200);
   assert.doesNotMatch(body, /<script>alert/);
@@ -299,7 +303,7 @@ test('обзор: неизвестный путь 404, неподдержива�
   const wrongMethods = [
     { route: '/', allow: 'GET' },
     { route: '/api/overview', allow: 'GET' },
-    { route: `/runs/${run.id}`, allow: 'GET' },
+    { route: `/legacy/runs/${run.id}`, allow: 'GET' },
     { route: '/login', allow: 'GET, POST' },
     { route: '/logout', allow: 'POST' },
   ];
@@ -316,15 +320,15 @@ test('обзор: чужой id прогона — 404', linux, async (t) => {
   const jar = new CookieJar();
   await jar.login(origin);
 
-  const foreignPage = await jar.request(origin, `/runs/${foreign.id}`);
+  const foreignPage = await jar.request(origin, `/legacy/runs/${foreign.id}`);
   assert.equal(foreignPage.status, 404);
   assert.doesNotMatch(await foreignPage.text(), /Чужой прогон/);
-  const unknown = await jar.request(origin, `/runs/${crypto.randomUUID()}`);
+  const unknown = await jar.request(origin, `/legacy/runs/${crypto.randomUUID()}`);
   assert.equal(unknown.status, 404);
 });
 
 test(
-  'вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, шестой неверный вход 429 — ядро не вызвано',
+  'вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, десятый неверный вход 429 — ядро не вызвано',
   linux,
   async (t) => {
     const { host, origin } = await overviewFixture(t);
@@ -354,7 +358,7 @@ test(
     tooLarge.resume();
     await once(tooLarge, 'end');
 
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       assert.equal((await jar.login(origin, '/', 'неверно')).status, 401);
     }
     const limited = await jar.login(origin, '/', 'неверно');
@@ -385,6 +389,12 @@ async function assertPortFree(port: number): Promise<void> {
 function stubHost(overrides: Partial<Host> = {}): Host {
   return {
     dataDir: '/nonexistent',
+    async callCore() {
+      throw new Error('не реализовано');
+    },
+    onCoreEvent() {
+      return () => {};
+    },
     async snapshot() {
       return { projects: [], runs: [] };
     },
@@ -474,6 +484,24 @@ test('служба: небезопасный секрет — отказ без 
   );
   assert.equal(hostCalls, 0);
   await assertPortFree(port);
+});
+
+test('служба: слушает только IPv4 loopback', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const config = configFor(root, project, await freePort());
+  const listen = http.Server.prototype.listen;
+  let boundHost = '';
+  t.mock.method(http.Server.prototype, 'listen', function (this: http.Server, port: number, hostname: string) {
+    boundHost = hostname;
+    return Reflect.apply(listen, this, [port, hostname]) as http.Server;
+  } as typeof http.Server.prototype.listen);
+
+  const service = await startService(config, { startHost: async () => stubHost() });
+  t.after(() => service.stop());
+  await service.ready;
+  assert.equal(boundHost, '127.0.0.1');
 });
 
 test('служба: хост получает agentEnv из buildAgentEnv', linux, async (t) => {

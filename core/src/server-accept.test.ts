@@ -56,7 +56,7 @@ test('приёмка: второй клиент видит дифф, после�
   );
   await untilGate(fixture.core, runId, 'gate2');
 
-  const response = await fixture.second.request(fixture.origin, `/runs/${runId}`);
+  const response = await fixture.second.request(fixture.origin, `/legacy/runs/${runId}`);
   assert.equal(response.status, 200);
   const page = await response.text();
   const run = (await fixture.core.getRun(runId))!;
@@ -123,7 +123,7 @@ test('приёмка: дифф меняется во время чтения', {
     }
     return original(id);
   });
-  const pending = once.second.request(once.origin, `/runs/${once.run.id}`);
+  const pending = once.second.request(once.origin, `/legacy/runs/${once.run.id}`);
   await entered.promise;
   once.core.kernel.save({ ...once.run, waitId: 'new-wait' });
   release.open();
@@ -142,7 +142,7 @@ test('приёмка: дифф меняется во время чтения', {
     unstable.core.kernel.save({ ...current, waitId: `changed-${unstableCalls}` });
     return originalUnstable(id);
   });
-  const changing = await unstable.second.request(unstable.origin, `/runs/${unstable.run.id}`);
+  const changing = await unstable.second.request(unstable.origin, `/legacy/runs/${unstable.run.id}`);
   assert.equal(changing.status, 200);
   const changingPage = await changing.text();
   assert.match(changingPage, /Дифф меняется — обновите страницу/);
@@ -160,7 +160,7 @@ test('приёмка: прогон удалён во время чтения д�
     await release.promise;
     return original(id);
   });
-  const pending = fixture.second.request(fixture.origin, `/runs/${fixture.run.id}`);
+  const pending = fixture.second.request(fixture.origin, `/legacy/runs/${fixture.run.id}`);
   await entered.promise;
   try {
     await fixture.core.dispatch({ type: 'run.delete', runId: fixture.run.id, deleteBranch: false });
@@ -176,7 +176,7 @@ test('приёмка: ошибка диффа при существующем п
   t.mock.method(fixture.core, 'getDiff', async () => {
     throw new Error('дифф недоступен');
   });
-  const response = await fixture.second.request(fixture.origin, `/runs/${fixture.run.id}`);
+  const response = await fixture.second.request(fixture.origin, `/legacy/runs/${fixture.run.id}`);
   assert.equal(response.status, 500);
   assert.ok(await fixture.core.getRun(fixture.run.id));
 });
@@ -309,7 +309,7 @@ test(
     assert.ok(marker1);
     assert.ok(marker2);
 
-    const page = await (await fixture.first.request(fixture.origin, `/runs/${runId}`)).text();
+    const page = await (await fixture.first.request(fixture.origin, `/legacy/runs/${runId}`)).text();
     assert.ok(page.includes(marker2));
     assert.ok(!page.includes(marker1));
     assert.match(page, /Нужен ещё один круг/);
@@ -339,7 +339,7 @@ test('ревью кода: только завершить или отменит
   const browser = new Browser();
   assert.equal((await browser.login(origin)).status, 303);
 
-  const page = await (await browser.request(origin, `/runs/${run.id}`)).text();
+  const page = await (await browser.request(origin, `/legacy/runs/${run.id}`)).text();
   assert.match(page, /Блокирующее замечание/);
   assert.match(page, /Заметка ревьюера/);
   assert.match(page, /Проверка не запускалась/);

@@ -6,7 +6,7 @@ function escapeHtml(value: string): string {
 }
 
 function decisionForm(run: RunFile, waitId: string, action: string, label: string, fields = ''): string {
-  return `<form method="post" action="/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(waitId)}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
+  return `<form method="post" action="/legacy/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(waitId)}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
 }
 
 function reviewItems(title: string, items: ReviewItem[]): string {

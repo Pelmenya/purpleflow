@@ -9,6 +9,7 @@
   ],
   "scripts": {
     "build:core": "npm run build -w @purpleflow/core",
+    "build:web": "npm run build:web -w @purpleflow/app",
     "dev": "npm run dev -w @purpleflow/app",
     "dev:installer": "npm run dev -w @purpleflow/installer",
     "build": "npm run build -w @purpleflow/core && npm run build -w @purpleflow/app && npm run build -w @purpleflow/installer",
@@ -21,7 +22,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check": "npm run typecheck && npm run lint && npm run format:check && npm run build:core && npm test && npm run coverage:server",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm run build:core && npm run build:web && npm test && npm run coverage:server",
     "release": "node scripts/release.mjs"
   },
   "devDependencies": {

@@ -38,15 +38,16 @@ type View = 'timeline' | 'log' | 'browser' | 'code' | 'notes' | 'files' | 'git' 
 /** Решения на гейте: после них детали (план, дифф) сворачиваются и снова виден весь таймлайн. */
 const GATE_ACTIONS = ['approve', 'reject', 'cancel', 'accept', 'fix', 'skip'];
 
-export function RunScreen({ runId }: { runId: string }) {
+export function RunScreen({ runId, tab }: { runId: string; tab?: 'log' }) {
   const { state, loadRun, go } = useStore();
   const run = state.details[runId];
-  const [view, setView] = useState<View>('timeline');
+  const [view, setView] = useState<View>(tab ?? 'timeline');
   const d = useStageDrawer(run, () => setView('code'));
   const { comment, setComment, lineComments, setLineComments, picked, setPicked } = useRunGate(runId);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const gateKey = useRef('');
+  const explicitTab = useRef(false);
   const preview = usePreview(runId);
   const agentScreen = useAgentScreen(runId);
   /** Команды проекта: у прогонов до вкладки «Браузер» команда запуска не сохранена в run.json. */
@@ -66,12 +67,13 @@ export function RunScreen({ runId }: { runId: string }) {
 
   useEffect(() => {
     void loadRun(runId);
-    setView('timeline');
+    setView(tab ?? 'timeline');
     d.reset();
     setError(null);
-    gateKey.current = '';
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- сброс экрана только при переходе к другому прогону
-  }, [runId, loadRun]);
+    gateKey.current = tab && run ? `${run.next}:${run.status}` : '';
+    explicitTab.current = Boolean(tab && !run);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сброс экрана при смене прогона или явной вкладки в адресе
+  }, [runId, loadRun, tab]);
 
   // Гейт ждёт решения — сами открываем детали этой стадии: план, а приёмку — на вкладке «Код».
   useEffect(() => {
@@ -79,6 +81,10 @@ export function RunScreen({ runId }: { runId: string }) {
     const key = `${run.next}:${run.status}`;
     if (key === gateKey.current) return;
     gateKey.current = key;
+    if (explicitTab.current) {
+      explicitTab.current = false;
+      return;
+    }
     if (run.status === 'waiting' && run.next === 'gate2') {
       d.reset();
       // Ревью кода: главное — замечания; если их нет, смотреть остаётся код.

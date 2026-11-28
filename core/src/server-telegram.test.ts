@@ -633,10 +633,10 @@ test('настройки: проба доставлена, без раздела
   const origin = await listen(t, createServerApp(config, fixture.host, { telegram }));
   const browser = new Browser();
   assert.equal((await browser.login(origin)).status, 303);
-  const settings = await browser.request(origin, '/settings');
+  const settings = await browser.request(origin, '/legacy/settings');
   assert.equal(settings.status, 200);
   assert.match(await settings.text(), /Telegram подключён/);
-  const probe = await browser.request(origin, '/settings/telegram/probe', { method: 'POST' });
+  const probe = await browser.request(origin, '/legacy/settings/telegram/probe', { method: 'POST' });
   assert.equal(probe.status, 200);
   assert.match(await probe.text(), /Пробное сообщение доставлено/);
   assert.equal(bot.requests.length, 1);
@@ -645,7 +645,7 @@ test('настройки: проба доставлена, без раздела
   const withoutTelegram = await listen(t, createServerApp(configFor(fixture.dataDir, fixture.project, fixture.settings), fixture.host));
   const other = new Browser();
   assert.equal((await other.login(withoutTelegram)).status, 303);
-  const disconnected = await other.request(withoutTelegram, '/settings');
+  const disconnected = await other.request(withoutTelegram, '/legacy/settings');
   assert.equal(disconnected.status, 200);
   assert.match(await disconnected.text(), /Telegram не подключён/);
 });
@@ -670,7 +670,7 @@ test('телеграм недоступен: ожидание в обзоре и
   );
   const browser = new Browser();
   await browser.login(origin);
-  const overview = await browser.request(origin, '/');
+  const overview = await browser.request(origin, '/legacy/');
   assert.match(await overview.text(), new RegExp(waiting.id));
   const decision = await postDecision(browser, origin, waiting.id, { expectedWaitId: waiting.waitId!, action: 'approve' });
   assert.equal(decision.status, 303);
@@ -690,7 +690,11 @@ test('ссылка уведомления после входа открывае
   });
   fixture.core.kernel.save(stopped);
   fixture.core.kernel.store.appendLog(stopped.id, 'Журнал остановки\n');
-  const origin = await listen(t, createServerApp(configFor(fixture.dataDir, fixture.project, fixture.settings), fixture.host));
+  const config = configFor(fixture.dataDir, fixture.project, fixture.settings);
+  config.webDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-telegram-web-'));
+  t.after(() => fs.rmSync(config.webDir!, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(config.webDir, 'index.html'), '<div id="root">Окно</div>');
+  const origin = await listen(t, createServerApp(config, fixture.host));
 
   for (const [run, route, expected] of [
     [waiting, `/runs/${waiting.id}`, /Ожидающий прогон/],
@@ -706,7 +710,10 @@ test('ссылка уведомления после входа открывае
     assert.equal(login.headers.get('location'), route);
     const page = await browser.request(origin, route);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), expected);
+    assert.match(await page.text(), /id="root"/);
+    const legacy = await browser.request(origin, route.replace('/runs/', '/legacy/runs/'));
+    assert.equal(legacy.status, 200);
+    assert.match(await legacy.text(), expected);
     assert.deepEqual(await fixture.host.readRun(run.id), before);
   }
 });
@@ -810,7 +817,7 @@ test('служба: SIGTERM во время зависшей пробы', integr
   t.after(service.stop);
   const browser = new Browser();
   await browser.login(service.origin);
-  const probing = browser.request(service.origin, '/settings/telegram/probe', { method: 'POST' });
+  const probing = browser.request(service.origin, '/legacy/settings/telegram/probe', { method: 'POST' });
   await waitFor(() => bot.requests.length === 1, 'Проба не началась');
   await terminate(service);
   await probing.catch(() => undefined);

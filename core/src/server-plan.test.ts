@@ -39,10 +39,10 @@ test('план: уточнение, возврат и утверждение и�
   assert.equal((await clientA.login(origin)).status, 303);
   assert.equal((await clientB.login(origin)).status, 303);
 
-  const project = await clientA.request(origin, '/projects/p1');
+  const project = await clientA.request(origin, '/legacy/projects/p1');
   const submissionId = /name="submissionId" value="([0-9a-f-]+)"/.exec(await project.text())?.[1];
   assert.ok(submissionId);
-  const started = await clientA.request(origin, '/projects/p1/runs', {
+  const started = await clientA.request(origin, '/legacy/projects/p1/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, task: 'Добавь mul' }),
@@ -51,7 +51,7 @@ test('план: уточнение, возврат и утверждение и�
   const runId = started.headers.get('location')?.split('/').at(-1);
   assert.ok(runId);
   const gate0 = await untilGate(fixture.core, runId, 'gate0');
-  const clarifyPage = await (await clientA.request(origin, `/runs/${runId}`)).text();
+  const clarifyPage = await (await clientA.request(origin, `/legacy/runs/${runId}`)).text();
   assert.match(clarifyPage, /Какие числа поддерживать\?/);
   assert.match(clarifyPage, /Целые/);
   assert.match(clarifyPage, /От этого зависит реализация/);
@@ -69,7 +69,7 @@ test('план: уточнение, возврат и утверждение и�
   const gate1 = await untilGate(fixture.core, runId, 'gate1');
   assert.ok(fake.plans().some((prompt) => prompt.includes('Какие числа поддерживать? — Целые и дробные')));
 
-  const planPage = await (await clientA.request(origin, `/runs/${runId}`)).text();
+  const planPage = await (await clientA.request(origin, `/legacy/runs/${runId}`)).text();
   assert.match(planPage, /# Умножение/);
   assert.match(planPage, /1\.1 mul в src\/math\.js/);
   assert.equal(expectedWaitIdOf(planPage), gate1.waitId);
@@ -82,7 +82,7 @@ test('план: уточнение, возврат и утверждение и�
   const returned = await untilGate(fixture.core, runId, 'gate1');
   assert.notEqual(returned.waitId, gate1.waitId);
 
-  const otherClientPage = await (await clientB.request(origin, `/runs/${runId}`)).text();
+  const otherClientPage = await (await clientB.request(origin, `/legacy/runs/${runId}`)).text();
   assert.match(otherClientPage, /Добавь отрицательные числа/);
   assert.equal(expectedWaitIdOf(otherClientPage), returned.waitId);
   const drive = t.mock.method(fixture.core.kernel.engine, 'drive');
@@ -118,13 +118,13 @@ test('план: пустой возврат и чужой прогон', { skip:
   assert.equal(rejected.status, 400);
   assert.deepEqual((await fixture.core.getRun(own.id))!.gates, []);
 
-  const foreignPage = await fixture.browser.request(fixture.origin, `/runs/${foreign.id}`);
+  const foreignPage = await fixture.browser.request(fixture.origin, `/legacy/runs/${foreign.id}`);
   assert.equal(foreignPage.status, 404);
   assert.equal(readDocs.mock.callCount(), 0);
 
   const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.project.path, encoding: 'utf8' }).trim();
   const gate2 = waitingRunFixture(fixture.dataDir, fixture.project.path, { next: 'gate2', baseCommit });
-  const gate2Page = await (await fixture.browser.request(fixture.origin, `/runs/${gate2.id}`)).text();
+  const gate2Page = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${gate2.id}`)).text();
   assert.match(gate2Page, /Посмотрите дифф и замечания ревью/);
   assert.match(gate2Page, /name="action" value="approve"/);
   assert.match(gate2Page, /name="action" value="reject"/);
@@ -190,7 +190,7 @@ test('план: экранирование', { skip: serverTestsSkip, timeout: 6
   fs.writeFileSync(path.join(docsDir, 'proposal.md'), "<script>alert('x')</script>\n**не разметка**");
   fs.writeFileSync(path.join(docsDir, 'tasks.md'), '<img src=x onerror=alert(1)>');
 
-  const page = await (await fixture.browser.request(fixture.origin, `/runs/${run.id}`)).text();
+  const page = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${run.id}`)).text();
   assert.match(page, /&lt;script&gt;alert\(&#39;x&#39;\)&lt;\/script&gt;/);
   assert.match(page, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(page, /\*\*не разметка\*\*/);
@@ -228,7 +228,7 @@ test('план: документы и версия из одного снимк�
   const browser = new Browser();
   assert.equal((await browser.login(origin)).status, 303);
 
-  const stablePage = await (await browser.request(origin, `/runs/${stable.id}`)).text();
+  const stablePage = await (await browser.request(origin, `/legacy/runs/${stable.id}`)).text();
   assert.equal(expectedWaitIdOf(stablePage), 'B');
   assert.match(stablePage, /План B/);
   assert.match(stablePage, /Задачи B/);
@@ -243,7 +243,7 @@ test('план: документы и версия из одного снимк�
     store.save({ ...current, waitId: `W${unstableDocsCalls}` });
     return { proposal: 'Нестабильный план', tasks: 'Нестабильные задачи', design: '', specs: [] };
   };
-  const unstablePage = await (await browser.request(origin, `/runs/${unstable.id}`)).text();
+  const unstablePage = await (await browser.request(origin, `/legacy/runs/${unstable.id}`)).text();
   assert.match(unstablePage, /План меняется — обновите страницу/);
   assert.doesNotMatch(unstablePage, /name="action"/);
   assert.doesNotMatch(unstablePage, /Нестабильный план/);
@@ -267,7 +267,7 @@ test('лимит: страница не смешивает версии ожид
     return snapshot();
   });
 
-  const page = await (await fixture.browser.request(fixture.origin, `/runs/${run.id}`)).text();
+  const page = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${run.id}`)).text();
 
   assert.equal(expectedWaitIdOf(page), 'WAIT-A');
   assert.match(page, /Причина A/);
@@ -304,7 +304,7 @@ test('лимит: ещё попытка и остановка', { skip: serverTe
   assert.equal(first.implAttemptsLimit, 3);
   assert.equal(first.stuck, undefined);
   assert.ok(first.reviews.at(-1)!.blocking.every((item) => item.origin === 'new'));
-  const firstPage = await (await fixture.browser.request(fixture.origin, `/runs/${first.id}`)).text();
+  const firstPage = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${first.id}`)).text();
   assert.match(firstPage, /3 из 3/);
   assert.match(firstPage, />Ещё попытка</);
   assert.match(firstPage, />Остановить</);
@@ -324,7 +324,7 @@ test('лимит: ещё попытка и остановка', { skip: serverTe
   assert.equal((await postDecision(fixture.browser, fixture.origin, second.id, stopFields)).status, 303);
   const stopped = (await fixture.core.getRun(second.id))!;
   assert.equal(stopped.status, 'stopped');
-  const stoppedPage = await (await fixture.browser.request(fixture.origin, `/runs/${second.id}`)).text();
+  const stoppedPage = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${second.id}`)).text();
   assert.match(stoppedPage, /Остановлен/);
   assert.match(stoppedPage, /Лимит попыток: Отменено/);
   const repeatedStop = await postDecision(fixture.browser, fixture.origin, second.id, stopFields);
@@ -339,7 +339,7 @@ test('лимит: ещё попытка и остановка', { skip: serverTe
     implAttemptsLimit: 3,
     message: 'Попытки реализации исчерпаны',
   });
-  const attemptsPage = await (await fixture.browser.request(fixture.origin, `/runs/${attempts.id}`)).text();
+  const attemptsPage = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${attempts.id}`)).text();
   assert.match(attemptsPage, /3 из 3/);
   assert.match(attemptsPage, /Попытки реализации исчерпаны/);
 
@@ -351,7 +351,7 @@ test('лимит: ещё попытка и остановка', { skip: serverTe
     stuck: { items: [{ file: null, line: null, message: 'Те же замечания' }] },
     message: 'Исполнитель и ревьюер ходят по кругу',
   });
-  const loopPage = await (await fixture.browser.request(fixture.origin, `/runs/${loop.id}`)).text();
+  const loopPage = await (await fixture.browser.request(fixture.origin, `/legacy/runs/${loop.id}`)).text();
   assert.match(loopPage, /Исполнитель и ревьюер ходят по кругу/);
   assert.doesNotMatch(loopPage, /2 из 3/);
 });
