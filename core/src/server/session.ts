@@ -1,5 +1,6 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { hashSecret, verifySecret } from './secret.js';
 import { WINDOW_ROUTES } from './web-assets.js';
 
 export interface Sessions {
@@ -15,7 +16,8 @@ export type LoginResult =
 export type BodyResult = { kind: 'ok'; body: string } | { kind: 'bodyTooLarge' } | { kind: 'timeout' } | { kind: 'aborted' };
 
 export interface CreateSessionsOptions {
-  secret: string;
+  secret?: string;
+  secretHash?: string;
   ttlMs?: number;
   now?: () => number;
 }
@@ -28,7 +30,7 @@ export interface ReadBodyOptions {
 export function createSessions(options: CreateSessionsOptions): Sessions {
   const ttlMs = options.ttlMs ?? 12 * 60 * 60 * 1000;
   const now = options.now ?? Date.now;
-  const secretDigest = createHash('sha256').update(options.secret).digest();
+  const storedSecret = options.secretHash ?? hashSecret(options.secret ?? '');
   const sessions = new Map<string, number>();
   const failures: number[] = [];
   const validate = (token: string): boolean => {
@@ -49,8 +51,7 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
         return { kind: 'rateLimited', retryAfterSec: Math.max(1, Math.ceil(((failures[0] ?? current) + 60_000 - current) / 1000)) };
       }
 
-      const candidateDigest = createHash('sha256').update(candidate).digest();
-      if (!timingSafeEqual(candidateDigest, secretDigest)) {
+      if (!verifySecret(candidate, storedSecret)) {
         failures.push(current);
         return { kind: 'invalid' };
       }

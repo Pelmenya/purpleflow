@@ -14,6 +14,7 @@ import type { Orchestrator } from './orchestrator.js';
 import type { CoreOptions } from './runtime.js';
 import type { ServerConfig, ServerProject } from './server/config.js';
 import { startHost, type Host } from './server/host.js';
+import { hashSecret } from './server/secret.js';
 import { RunStore } from './store.js';
 
 export const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -24,7 +25,7 @@ const SECRET = 'секрет владельца';
 
 export function configFor(dataDir: string, project: ServerProject, settings?: CoreSettings): ServerConfig {
   const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   return {
     dataDir,
     promptsDir: PROMPTS,
@@ -274,7 +275,7 @@ export function makeServerStand(opts: { testCommand?: string } = {}) {
 
   const project: ServerProject = { id: 'p1', path: root, testCommand: opts.testCommand ?? 'node --version' };
   const secretFile = path.join(dataDir, 'secret');
-  fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   const configFile = path.join(sandbox, 'server.json');
   fs.writeFileSync(
     configFile,

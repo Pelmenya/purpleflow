@@ -12,6 +12,7 @@ import { emptyUsage } from './agents/common.js';
 import type { ServerConfig } from './server/config.js';
 import { startHost, type Host, type HostSnapshot, type StartHostOptions } from './server/host.js';
 import { createServerApp, startService } from './server/main.js';
+import { hashSecret } from './server/secret.js';
 import { RunStore } from './store.js';
 import type { RunFile } from './types.js';
 
@@ -57,7 +58,7 @@ function saveRun(store: RunStore, projectPath: string, over: Partial<RunFile> = 
 
 function configFor(root: string, project: string, port = 0): ServerConfig {
   const secretFile = path.join(root, 'secret');
-  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, SECRET, { mode: 0o600 });
+  if (!fs.existsSync(secretFile)) fs.writeFileSync(secretFile, hashSecret(SECRET), { mode: 0o600 });
   return {
     dataDir: path.join(root, 'data'),
     promptsDir: PROMPTS,

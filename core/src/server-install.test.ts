@@ -12,6 +12,7 @@ import { buildAgentEnv, loadServerConfig } from './server/config.js';
 import type { ServerConfig } from './server/config.js';
 import { startHost } from './server/host.js';
 import { createServerApp } from './server/main.js';
+import { hashSecret } from './server/secret.js';
 import { Browser, listen, makeServerStand, serverTestsSkip } from './server-testkit.test.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
@@ -100,7 +101,7 @@ test('пример unit совпадает со сборкой', linuxOnly, () =
 
 function readExampleConfig(dir: string): { file: string; value: ReturnType<typeof installConfig> } {
   const secretFile = path.join(dir, 'secret');
-  fs.writeFileSync(secretFile, 'секрет владельца', { mode: 0o600 });
+  fs.writeFileSync(secretFile, hashSecret('секрет владельца'), { mode: 0o600 });
   const text = substituted(path.join(CHECKOUT, 'docs', 'server', 'config.example.json'), {
     __CHECKOUT__: CHECKOUT,
     __DATA_DIR__: path.join(dir, 'service-data'),

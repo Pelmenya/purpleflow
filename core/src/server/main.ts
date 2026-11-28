@@ -13,6 +13,7 @@ import type { Host, HostSnapshot, StartTaskResult } from './host.js';
 import type { ExpectedDecision } from './decisions.js';
 import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './session.js';
 import type { Sessions } from './session.js';
+import { createLoginSecret, readLoginSecret } from './secret.js';
 import { startTelegram } from './telegram.js';
 import type { TelegramHandle } from './telegram.js';
 import { createWebAssets, isWindowRoute, LOGIN_CSP } from './web-assets.js';
@@ -311,7 +312,7 @@ export function createServerApp(
     };
   } = {},
 ): RequestListener {
-  const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
+  const sessions = opts.sessions ?? createSessions({ secretHash: readLoginSecret(config.secretFile), now: opts.now });
   const bridge = createBridgeHandler(config, host);
   const webAssets = createWebAssets(config.webDir);
   return async (req, res) => {
@@ -613,7 +614,7 @@ export async function startService(
   deps: { startHost?: typeof startServerHost; startTelegram?: typeof startTelegram; now?: () => number } = {},
 ): Promise<Service> {
   const now = deps.now;
-  const sessions = createSessions({ secret: readSecret(config.secretFile), now });
+  const sessions = createSessions({ secretHash: readLoginSecret(config.secretFile), now });
   const telegramToken = config.telegram ? readSecret(config.telegram.tokenFile) : undefined;
   const agentEnv = buildAgentEnv();
   const starter = deps.startHost ?? startServerHost;
@@ -733,6 +734,17 @@ export async function main(argv: string[]): Promise<void> {
     failed = true;
     console.error(error instanceof Error ? error.message : String(error));
   };
+  if (argv[0] === 'hash-secret') {
+    try {
+      if (argv.length !== 2 || !argv[1]) throw new Error('Использование: main.js hash-secret <файл>');
+      console.log(createLoginSecret(argv[1]));
+      process.exitCode = 0;
+    } catch (error) {
+      report(error);
+      process.exitCode = 1;
+    }
+    return;
+  }
   const finish = (): Promise<void> => {
     completion ??= (async () => {
       let service: Service | undefined;
