@@ -123,13 +123,20 @@ test('конфиг: неверные models, agents и claudeAuth отклоне
     { settings: { models: { foo: 'opus' } }, field: 'settings.models.foo' },
     { settings: { agents: { planner: 'gpt' } }, field: 'settings.agents.planner' },
     { settings: { agents: { visual: 'agy' } }, field: 'settings.agents.visual' },
-    { settings: { claudeAuth: 'env' }, field: 'settings.claudeAuth' },
+    { settings: { claudeAuth: 'apikey' }, field: 'settings.claudeAuth' },
   ];
 
   for (const item of cases) {
     const file = writeConfig(dir, { ...base, settings: item.settings });
     assertConfigError(file, item.field);
   }
+});
+
+test('конфиг: claudeAuth env принимается и сохраняется', (t) => {
+  const dir = tempDir(t);
+  const file = writeConfig(dir, { ...minimalConfig(dir), settings: { claudeAuth: 'env' } });
+
+  assert.equal(loadServerConfig(file).settings.claudeAuth, 'env');
 });
 
 test('конфиг: частичные settings.models и settings.agents независимо сохраняют остальные значения по умолчанию', (t) => {

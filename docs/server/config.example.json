@@ -1,0 +1,37 @@
+{
+  "dataDir": "__DATA_DIR__",
+  "promptsDir": "__CHECKOUT__/core/prompts",
+  "projects": [
+    {
+      "id": "main",
+      "path": "__PROJECT_DIR__",
+      "testCommand": "node --version"
+    }
+  ],
+  "publicOrigin": "https://purpleflow.example.com",
+  "port": 4173,
+  "secretFile": "__SECRET_FILE__",
+  "settings": {
+    "toolPaths": {
+      "claude": "__CLAUDE__",
+      "codex": "__CODEX__",
+      "openspec": "__CHECKOUT__/node_modules/.bin/openspec"
+    },
+    "models": {
+      "planner": "opus",
+      "executor": "sonnet",
+      "reviewer": ""
+    },
+    "agents": {
+      "planner": "claude",
+      "executor": "claude",
+      "reviewer": "claude"
+    },
+    "enabledAgents": ["claude"],
+    "claudeAuth": "login",
+    "userConfig": false,
+    "maxParallel": 2,
+    "agentTimeoutMin": 30,
+    "testTimeoutMin": 10
+  }
+}
