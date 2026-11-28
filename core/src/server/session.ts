@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { WINDOW_ROUTES } from './web-assets.js';
 
 export interface Sessions {
   login(candidate: string): LoginResult;
@@ -168,11 +169,7 @@ export function checkOrigin(req: IncomingMessage, publicOrigin: string): boolean
   return req.headers.origin !== undefined && req.headers.origin === publicOrigin;
 }
 
-const returnRoutes = [
-  /^\/$/,
-  /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-  /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i,
-];
+const returnRoutes = [...WINDOW_ROUTES];
 
 export function isReturnRoute(path: string): string {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || path.includes('..')) return '/';

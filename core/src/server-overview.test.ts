@@ -165,8 +165,8 @@ test('обзор: две сессии видят одинаковую непус
     [run.id],
   );
 
-  const firstHtml = await (await first.request(origin, '/')).text();
-  const secondHtml = await (await second.request(origin, '/')).text();
+  const firstHtml = await (await first.request(origin, '/legacy/')).text();
+  const secondHtml = await (await second.request(origin, '/legacy/')).text();
   assert.equal(firstHtml, secondHtml);
   assert.match(firstHtml, /Записанный прогон/);
 });
@@ -192,14 +192,11 @@ test('обзор: прямая ссылка ведёт ко входу и воз
   assert.equal(location.pathname, '/login');
   assert.equal(location.searchParams.get('returnTo'), route);
 
-  const form = await jar.request(origin, `${location.pathname}${location.search}`);
-  assert.equal(form.status, 200);
-  assert.match(await form.text(), /name="returnTo"[^>]*value="\/runs\//);
   const entered = await jar.login(origin, route);
   assert.equal(entered.status, 303);
   assert.equal(entered.headers.get('location'), route);
 
-  const page = await jar.request(origin, route);
+  const page = await jar.request(origin, `/legacy${route}`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), /Записанный прогон/);
 });
@@ -274,7 +271,7 @@ test('обзор: название прогона с <script> выводится
   const jar = new CookieJar();
   await jar.login(origin);
 
-  const response = await jar.request(origin, '/');
+  const response = await jar.request(origin, '/legacy/');
   const body = await response.text();
   assert.equal(response.status, 200);
   assert.doesNotMatch(body, /<script>alert/);
@@ -305,7 +302,7 @@ test('обзор: неизвестный путь 404, неподдержива�
   const wrongMethods = [
     { route: '/', allow: 'GET' },
     { route: '/api/overview', allow: 'GET' },
-    { route: `/runs/${run.id}`, allow: 'GET' },
+    { route: `/legacy/runs/${run.id}`, allow: 'GET' },
     { route: '/login', allow: 'GET, POST' },
     { route: '/logout', allow: 'POST' },
   ];
@@ -322,10 +319,10 @@ test('обзор: чужой id прогона — 404', linux, async (t) => {
   const jar = new CookieJar();
   await jar.login(origin);
 
-  const foreignPage = await jar.request(origin, `/runs/${foreign.id}`);
+  const foreignPage = await jar.request(origin, `/legacy/runs/${foreign.id}`);
   assert.equal(foreignPage.status, 404);
   assert.doesNotMatch(await foreignPage.text(), /Чужой прогон/);
-  const unknown = await jar.request(origin, `/runs/${crypto.randomUUID()}`);
+  const unknown = await jar.request(origin, `/legacy/runs/${crypto.randomUUID()}`);
   assert.equal(unknown.status, 404);
 });
 

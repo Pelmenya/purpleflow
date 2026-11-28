@@ -44,10 +44,10 @@ function escapeHtml(value: string): string {
 }
 
 async function startTask(browser: Browser, origin: string, task: string): Promise<string> {
-  const project = await browser.request(origin, '/projects/p1');
+  const project = await browser.request(origin, '/legacy/projects/p1');
   const submissionId = /name="submissionId" value="([0-9a-f-]+)"/.exec(await project.text())?.[1];
   assert.ok(submissionId);
-  const started = await browser.request(origin, '/projects/p1/runs', {
+  const started = await browser.request(origin, '/legacy/projects/p1/runs', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ submissionId, task }),
@@ -79,9 +79,9 @@ test('журнал и остановка: вход с возвратом, 404 д
   t.after(service.stop);
 
   const anonymous = new Browser();
-  const anonymousLog = await anonymous.request(service.origin, `/runs/${foreign.id}/log`);
+  const anonymousLog = await anonymous.request(service.origin, `/legacy/runs/${foreign.id}/log`);
   assert.equal(anonymousLog.status, 303);
-  assert.equal(anonymousLog.headers.get('location'), `/login?returnTo=${encodeURIComponent(`/runs/${foreign.id}/log`)}`);
+  assert.equal(anonymousLog.headers.get('location'), `/login?returnTo=${encodeURIComponent(`/legacy/runs/${foreign.id}/log`)}`);
 
   const client = new Browser();
   assert.equal((await client.login(service.origin)).status, 303);
@@ -94,24 +94,24 @@ test('журнал и остановка: вход с возвратом, 404 д
   const failed = await stoppedRun(store, runId);
   assert.ok(failed.message);
 
-  const anonymousStop = await anonymous.request(service.origin, `/runs/${runId}/stop`, { method: 'POST' });
+  const anonymousStop = await anonymous.request(service.origin, `/legacy/runs/${runId}/stop`, { method: 'POST' });
   assert.equal(anonymousStop.status, 303);
   assert.deepEqual(store.load(runId), failed);
 
   const secondClient = new Browser();
-  const loggedIn = await secondClient.login(service.origin, `/runs/${runId}/log`);
+  const loggedIn = await secondClient.login(service.origin, `/legacy/runs/${runId}/log`);
   assert.equal(loggedIn.status, 303);
-  assert.equal(loggedIn.headers.get('location'), `/runs/${runId}/log`);
-  const page = await secondClient.request(service.origin, `/runs/${runId}`);
+  assert.equal(loggedIn.headers.get('location'), `/legacy/runs/${runId}/log`);
+  const page = await secondClient.request(service.origin, `/legacy/runs/${runId}`);
   assert.equal(page.status, 200);
   assert.match(await page.text(), new RegExp(escapeHtml(failed.message).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  const log = await secondClient.request(service.origin, `/runs/${runId}/log`);
+  const log = await secondClient.request(service.origin, `/legacy/runs/${runId}/log`);
   assert.equal(log.status, 200);
   assert.match(await log.text(), new RegExp(escapeHtml(failed.message).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
-  const foreignLog = await secondClient.request(service.origin, `/runs/${foreign.id}/log`);
+  const foreignLog = await secondClient.request(service.origin, `/legacy/runs/${foreign.id}/log`);
   assert.equal(foreignLog.status, 404);
-  const foreignStop = await secondClient.request(service.origin, `/runs/${foreign.id}/stop`, { method: 'POST' });
+  const foreignStop = await secondClient.request(service.origin, `/legacy/runs/${foreign.id}/stop`, { method: 'POST' });
   assert.equal(foreignStop.status, 404);
   assert.equal(JSON.stringify(store.load(foreign.id)), foreignBefore);
   assert.equal(store.readLog(foreign.id), 'Чужой журнал не менять\n');
@@ -138,10 +138,10 @@ async function hostFixture(
 }
 
 function beginStartTask(browser: Browser, origin: string, task: string): Promise<Response> {
-  return browser.request(origin, '/projects/p1').then(async (project) => {
+  return browser.request(origin, '/legacy/projects/p1').then(async (project) => {
     const submissionId = /name="submissionId" value="([0-9a-f-]+)"/.exec(await project.text())?.[1];
     assert.ok(submissionId);
-    return browser.request(origin, '/projects/p1/runs', {
+    return browser.request(origin, '/legacy/projects/p1/runs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ submissionId, task }),
@@ -168,7 +168,7 @@ function runningFixture(dataDir: string, projectPath: string): RunFile {
 }
 
 function stopFromBrowser(browser: Browser, origin: string, runId: string, headers?: HeadersInit): Promise<Response> {
-  return browser.request(origin, `/runs/${runId}/stop`, { method: 'POST', headers });
+  return browser.request(origin, `/legacy/runs/${runId}/stop`, { method: 'POST', headers });
 }
 
 test('остановка сериализована с решениями', recoveryTest, async (t) => {
@@ -253,7 +253,7 @@ async function stopDuringPreparation(t: TestContext, beforeInit: boolean): Promi
   const run = fixture.core.kernel.mustLoad(runId);
   assert.equal(run.status, 'stopped');
   assert.equal(run.message, USER_STOP_MESSAGE);
-  assert.equal((await fixture.browser.request(fixture.origin, `/runs/${runId}`)).status, 200);
+  assert.equal((await fixture.browser.request(fixture.origin, `/legacy/runs/${runId}`)).status, 200);
   assert.deepEqual(fixture.core.kernel.store.readPids(runId), []);
 }
 
@@ -436,14 +436,14 @@ test('остановка кнопкой', recoveryTest, async (t) => {
   const { runId } = await reachImplement(service, stand);
   const secondClient = new Browser();
   assert.equal((await secondClient.login(service.origin)).status, 303);
-  const page = await secondClient.request(service.origin, `/runs/${runId}`);
+  const page = await secondClient.request(service.origin, `/legacy/runs/${runId}`);
   assert.equal(page.status, 200);
   const action = /<form method="post" action="([^"]+)"><button type="submit">Остановить<\/button><\/form>/.exec(await page.text())?.[1];
-  assert.equal(action, `/runs/${runId}/stop`);
+  assert.equal(action, `/legacy/runs/${runId}/stop`);
 
   const stopped = await secondClient.request(service.origin, action!, { method: 'POST' });
   assert.equal(stopped.status, 303);
-  const after = await secondClient.request(service.origin, `/runs/${runId}`);
+  const after = await secondClient.request(service.origin, `/legacy/runs/${runId}`);
   assert.equal(after.status, 200);
   const html = await after.text();
   assert.match(html, /data-status="stopped"/);

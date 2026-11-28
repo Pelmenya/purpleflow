@@ -15,6 +15,7 @@ import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRou
 import type { Sessions } from './session.js';
 import { startTelegram } from './telegram.js';
 import type { TelegramHandle } from './telegram.js';
+import { createWebAssets, isWindowRoute, LOGIN_CSP } from './web-assets.js';
 
 export interface Service {
   ready: Promise<void>;
@@ -58,40 +59,40 @@ function settingsPage(telegram?: TelegramHandle, notice = ''): string {
   const status = telegram.status();
   const delivery = status.lastDeliveredAt ? `<p>Последняя доставка: ${escapeHtml(new Date(status.lastDeliveredAt).toISOString())}</p>` : '';
   const error = status.lastError ? `<p>Последняя ошибка: ${escapeHtml(status.lastError)}</p>` : '';
-  return `<h1>Настройки</h1><p>Telegram подключён.</p>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${delivery}${error}<form method="post" action="/settings/telegram/probe"><button type="submit">Отправить пробное сообщение</button></form><p>При обрыве ответа или перезапуске между ответом Telegram и сохранением доставки возможен один повтор сообщения.</p>`;
+  return `<h1>Настройки</h1><p>Telegram подключён.</p>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${delivery}${error}<form method="post" action="/legacy/settings/telegram/probe"><button type="submit">Отправить пробное сообщение</button></form><p>При обрыве ответа или перезапуске между ответом Telegram и сохранением доставки возможен один повтор сообщения.</p>`;
 }
 
 function overviewPage(snapshot: HostSnapshot): string {
   const projects = snapshot.projects
     .map(
-      (project) => `<li data-project-id="${escapeHtml(project.id)}"><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
+      (project) => `<li data-project-id="${escapeHtml(project.id)}"><a href="/legacy/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
     )
     .join('');
   const runs = snapshot.runs
     .map(
       (run) =>
-        `<tr><td><a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a></td><td>${escapeHtml(run.projectId)}</td><td>${escapeHtml(run.status)}</td><td>${escapeHtml(run.next)}</td></tr>`,
+        `<tr><td><a href="/legacy/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a></td><td>${escapeHtml(run.projectId)}</td><td>${escapeHtml(run.status)}</td><td>${escapeHtml(run.next)}</td></tr>`,
     )
     .join('');
   const waiting = snapshot.runs
     .filter((run) => run.status === 'waiting' && run.gate)
-    .map((run) => `<li><a href="/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a>: ${escapeHtml(run.reason ?? '')}</li>`)
+    .map((run) => `<li><a href="/legacy/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a>: ${escapeHtml(run.reason ?? '')}</li>`)
     .join('');
   return `<h1>Проекты и прогоны</h1>${logoutForm()}<h2>Проекты</h2><ul>${projects}</ul><h2>Ожидают решения</h2><ul>${waiting}</ul><h2>Прогоны</h2><table><thead><tr><th>Прогон</th><th>Проект</th><th>Статус</th><th>Стадия</th></tr></thead><tbody>${runs}</tbody></table>`;
 }
 
 function projectPage(project: HostSnapshot['projects'][number], submissionId: string): string {
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<p><a href="/projects/${project.id}/chats">Чаты проекта</a></p><form method="post" action="/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
+  return `<p><a href="/legacy/">Все проекты и прогоны</a></p><h1>${escapeHtml(project.name)}</h1>${logoutForm()}<p><a href="/legacy/projects/${project.id}/chats">Чаты проекта</a></p><form method="post" action="/legacy/projects/${project.id}/runs"><input type="hidden" name="submissionId" value="${submissionId}"><label>Задача <textarea name="task" required></textarea></label><button type="submit">Запустить</button></form>`;
 }
 
 function chatListPage(project: HostSnapshot['projects'][number], chats: ChatSummary[]): string {
   const items = chats
     .map(
       (chat) =>
-        `<li><a href="/chats/${encodeURIComponent(chat.id)}">${escapeHtml(chat.title)}</a>${chat.busy ? ' — ответ пишется' : ''}</li>`,
+        `<li><a href="/legacy/chats/${encodeURIComponent(chat.id)}">${escapeHtml(chat.title)}</a>${chat.busy ? ' — ответ пишется' : ''}</li>`,
     )
     .join('');
-  return `<p><a href="/projects/${project.id}">${escapeHtml(project.name)}</a></p><h1>Чаты проекта</h1>${logoutForm()}${items ? `<ul>${items}</ul>` : '<p>Чатов пока нет.</p>'}<form method="post" action="/projects/${project.id}/chats"><button type="submit">Создать чат</button></form>`;
+  return `<p><a href="/legacy/projects/${project.id}">${escapeHtml(project.name)}</a></p><h1>Чаты проекта</h1>${logoutForm()}${items ? `<ul>${items}</ul>` : '<p>Чатов пока нет.</p>'}<form method="post" action="/legacy/projects/${project.id}/chats"><button type="submit">Создать чат</button></form>`;
 }
 
 function chatPage(view: { chat: ChatFile; busy: boolean }, submissionId: string, notice = ''): string {
@@ -110,12 +111,12 @@ function chatPage(view: { chat: ChatFile; busy: boolean }, submissionId: string,
       return `<article data-message-id="${escapeHtml(message.id)}"><strong>${message.role === 'user' ? 'Владелец' : 'Ассистент'}${status}</strong><pre>${escapeHtml(message.text)}</pre></article>`;
     })
     .join('');
-  const action = `/chats/${encodeURIComponent(chat.id)}/messages`;
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(chat.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<section><h2>История</h2>${messages || '<p>Сообщений пока нет.</p>'}</section><form method="post" action="${action}"><fieldset${view.busy ? ' disabled' : ''}><input type="hidden" name="submissionId" value="${submissionId}"><label>Сообщение <textarea name="text" required></textarea></label><button type="submit">Отправить</button></fieldset></form>`;
+  const action = `/legacy/chats/${encodeURIComponent(chat.id)}/messages`;
+  return `<p><a href="/legacy/">Все проекты и прогоны</a></p><h1>${escapeHtml(chat.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<section><h2>История</h2>${messages || '<p>Сообщений пока нет.</p>'}</section><form method="post" action="${action}"><fieldset${view.busy ? ' disabled' : ''}><input type="hidden" name="submissionId" value="${submissionId}"><label>Сообщение <textarea name="text" required></textarea></label><button type="submit">Отправить</button></fieldset></form>`;
 }
 
 function decisionForm(run: RunFile, action: string, label: string, fields = ''): string {
-  return `<form method="post" action="/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(run.waitId ?? '')}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
+  return `<form method="post" action="/legacy/runs/${encodeURIComponent(run.id)}/decision"><input type="hidden" name="expectedWaitId" value="${escapeHtml(run.waitId ?? '')}">${fields}<button type="submit" name="action" value="${action}">${label}</button></form>`;
 }
 
 function waitingSections(run: RunFile, docs: ChangeDocs | null | undefined, diff: DiffFile[] | null | undefined): string {
@@ -198,21 +199,21 @@ function runPage(snapshot: HostSnapshot, run: RunFile, notice = '', docs?: Chang
     finished: 'Завершён',
   };
   const message = run.message ? `<p data-run-message>${escapeHtml(run.message)}</p>` : '';
-  const logLink = `<p><a href="/runs/${encodeURIComponent(run.id)}/log">Журнал</a></p>`;
+  const logLink = `<p><a href="/legacy/runs/${encodeURIComponent(run.id)}/log">Журнал</a></p>`;
   const stopForm =
     run.status === 'running' || run.status === 'queued'
-      ? `<form method="post" action="/runs/${encodeURIComponent(run.id)}/stop"><button type="submit">Остановить</button></form>`
+      ? `<form method="post" action="/legacy/runs/${encodeURIComponent(run.id)}/stop"><button type="submit">Остановить</button></form>`
       : '';
-  return `<p><a href="/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${stopForm}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
+  return `<p><a href="/legacy/">Все проекты и прогоны</a></p><h1>${escapeHtml(run.title)}</h1>${notice ? `<p>${escapeHtml(notice)}</p>` : ''}${logoutForm()}<dl><dt>Прогон</dt><dd>${escapeHtml(run.id)}</dd><dt>Проект</dt><dd>${escapeHtml(project?.name ?? listed?.projectId ?? '')}</dd><dt>Статус</dt><dd data-status="${escapeHtml(run.status)}">${escapeHtml(statuses[run.status])}</dd><dt>Стадия</dt><dd>${escapeHtml(run.next)}</dd></dl>${message}${logLink}${stopForm}${waitingSections(run, docs, diff)}${decisionHistory(run)}`;
 }
 
 function startResultPage(result: StartTaskResult, projectId: string): string {
   if (result.status === 'rejected') {
-    return `<h1>Задача не запущена</h1><p>${escapeHtml(result.message)}</p><p><a href="/projects/${projectId}">Вернуться к задаче</a></p>`;
+    return `<h1>Задача не запущена</h1><p>${escapeHtml(result.message)}</p><p><a href="/legacy/projects/${projectId}">Вернуться к задаче</a></p>`;
   }
   const message =
     result.status === 'conflict' ? 'Этот идентификатор уже использован для другой задачи' : 'Исход предыдущего запуска неизвестен';
-  return `<h1>Задача не запущена повторно</h1><p>${message}</p><p><a href="/">Проверьте список прогонов</a></p>`;
+  return `<h1>Задача не запущена повторно</h1><p>${message}</p><p><a href="/legacy/">Проверьте список прогонов</a></p>`;
 }
 
 function sessionToken(req: IncomingMessage): string {
@@ -242,35 +243,47 @@ function decisionFromForm(form: URLSearchParams): ExpectedDecision {
   } as ExpectedDecision;
 }
 
-const runRoute = /^\/runs\/([^/]+)$/;
-const runLogRoute = /^\/runs\/([^/]+)\/log$/;
-const runStopRoute = /^\/runs\/([^/]+)\/stop$/;
-const runDecisionRoute = /^\/runs\/([^/]+)\/decision$/;
-const projectRoute = /^\/projects\/([A-Za-z0-9_-]+)$/;
-const projectRunsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/runs$/;
-const projectChatsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/chats$/;
-const chatRoute = /^\/chats\/([A-Za-z0-9_-]+)$/;
+const runRoute = /^\/legacy\/runs\/([^/]+)$/;
+const runLogRoute = /^\/legacy\/runs\/([^/]+)\/log$/;
+const runStopRoute = /^\/legacy\/runs\/([^/]+)\/stop$/;
+const runDecisionRoute = /^\/legacy\/runs\/([^/]+)\/decision$/;
+const projectRoute = /^\/legacy\/projects\/([A-Za-z0-9_-]+)$/;
+const projectRunsRoute = /^\/legacy\/projects\/([A-Za-z0-9_-]+)\/runs$/;
+const projectChatsRoute = /^\/legacy\/projects\/([A-Za-z0-9_-]+)\/chats$/;
+const chatRoute = /^\/legacy\/chats\/([A-Za-z0-9_-]+)$/;
 const chatApiRoute = /^\/api\/chats\/([A-Za-z0-9_-]+)$/;
-const chatMessagesRoute = /^\/chats\/([A-Za-z0-9_-]+)\/messages$/;
+const chatMessagesRoute = /^\/legacy\/chats\/([A-Za-z0-9_-]+)\/messages$/;
 const coreRoute = /^\/api\/core\/[^/]+$/;
 const readMethods = ['GET'] as const;
 const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ['/', readMethods],
+  ['/legacy/', readMethods],
   ['/api/overview', readMethods],
   ['/api/settings', readMethods],
   ['/api/events', readMethods],
   ['/login', ['GET', 'POST']],
   ['/logout', ['POST']],
-  ['/settings', readMethods],
-  ['/settings/telegram/probe', ['POST']],
+  ['/legacy/settings', readMethods],
+  ['/legacy/settings/telegram/probe', ['POST']],
 ]);
-registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+$/);
-registerReturnRoute(/^\/projects\/[A-Za-z0-9_-]+\/chats$/);
-registerReturnRoute(/^\/chats\/[A-Za-z0-9_-]+$/);
-registerReturnRoute(/^\/settings$/);
+registerReturnRoute(/^\/legacy\/$/);
+registerReturnRoute(/^\/legacy\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+registerReturnRoute(/^\/legacy\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i);
+registerReturnRoute(/^\/legacy\/projects\/[A-Za-z0-9_-]+$/);
+registerReturnRoute(/^\/legacy\/projects\/[A-Za-z0-9_-]+\/chats$/);
+registerReturnRoute(/^\/legacy\/chats\/[A-Za-z0-9_-]+$/);
+registerReturnRoute(/^\/legacy\/settings$/);
 
 function allowedMethods(route: string): readonly string[] | undefined {
-  if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route) || chatRoute.test(route) || chatApiRoute.test(route))
+  if (
+    isWindowRoute(route) ||
+    route.startsWith('/assets/') ||
+    runRoute.test(route) ||
+    runLogRoute.test(route) ||
+    projectRoute.test(route) ||
+    chatRoute.test(route) ||
+    chatApiRoute.test(route)
+  )
     return readMethods;
   if (projectChatsRoute.test(route)) return ['GET', 'POST'];
   if (coreRoute.test(route)) return ['POST'];
@@ -296,6 +309,7 @@ export function createServerApp(
 ): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
   const bridge = createBridgeHandler(config, host);
+  const webAssets = createWebAssets(config.webDir);
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -311,12 +325,17 @@ export function createServerApp(
     const method = req.method ?? '';
     const methods = allowedMethods(route);
     const publicLogin = route === '/login' && methods?.includes(method) === true;
-    if (!publicLogin && !sessions.guard(req, res)) return;
+    const publicAsset = route.startsWith('/assets/') && method === 'GET';
+    if (!publicLogin && !publicAsset && !sessions.guard(req, res)) return;
 
     try {
       if (await bridge(req, res)) return;
+      if (webAssets.serve(route, method, res)) return;
       if (route === '/login' && method === 'GET') {
-        html(res, 200, loginPage(isReturnRoute(url.searchParams.get('returnTo') ?? '/')));
+        if (!webAssets.login(res)) {
+          res.setHeader('Content-Security-Policy', LOGIN_CSP);
+          html(res, 200, loginPage(isReturnRoute(url.searchParams.get('returnTo') ?? '/')));
+        }
         return;
       }
       if (route === '/login' && method === 'POST') {
@@ -334,10 +353,12 @@ export function createServerApp(
         const returnTo = isReturnRoute(form.get('returnTo') ?? '/');
         const result = sessions.login(form.get('secret') ?? '');
         if (result.kind === 'invalid') {
+          res.setHeader('Content-Security-Policy', LOGIN_CSP);
           html(res, 401, loginPage(returnTo, 'Неверный секрет'));
           return;
         }
         if (result.kind === 'rateLimited') {
+          res.setHeader('Content-Security-Policy', LOGIN_CSP);
           html(res, 429, loginPage(returnTo, 'Слишком много попыток'), { 'Retry-After': String(result.retryAfterSec) });
           return;
         }
@@ -358,11 +379,11 @@ export function createServerApp(
         res.writeHead(303, { Location: '/', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
         return;
       }
-      if (route === '/settings' && method === 'GET') {
+      if (route === '/legacy/settings' && method === 'GET') {
         html(res, 200, settingsPage(opts.telegram));
         return;
       }
-      if (route === '/settings/telegram/probe' && method === 'POST') {
+      if (route === '/legacy/settings/telegram/probe' && method === 'POST') {
         if (!checkOrigin(req, config.publicOrigin)) {
           send(res, 403, 'Запрещено');
           return;
@@ -383,7 +404,7 @@ export function createServerApp(
         }
         return;
       }
-      if (route === '/' && method === 'GET') {
+      if (route === '/legacy/' && method === 'GET') {
         html(res, 200, overviewPage(await host.snapshot()));
         return;
       }
@@ -413,7 +434,7 @@ export function createServerApp(
           return;
         }
         const chat = await host.createChat(projectChatsMatch[1]!);
-        if (chat) res.writeHead(303, { Location: `/chats/${encodeURIComponent(chat.id)}` }).end();
+        if (chat) res.writeHead(303, { Location: `/legacy/chats/${encodeURIComponent(chat.id)}` }).end();
         else send(res, 404, 'Проект не найден');
         return;
       }
@@ -449,7 +470,7 @@ export function createServerApp(
         const result = await host.sendChat(chatId, form.get('text') ?? '', form.get('submissionId') ?? '');
         if (result.status === 'accepted') {
           await opts.testHooks?.beforeChatRedirect?.();
-          res.writeHead(303, { Location: `/chats/${encodeURIComponent(chatId)}` }).end();
+          res.writeHead(303, { Location: `/legacy/chats/${encodeURIComponent(chatId)}` }).end();
           return;
         }
         if (result.status === 'notFound') send(res, 404, 'Чат не найден');
@@ -458,7 +479,7 @@ export function createServerApp(
           html(
             res,
             409,
-            `<h1>Исход неизвестен</h1><p>Служба не записала исход предыдущей отправки. Повторный запуск не выполнялся.</p><p><a href="/chats/${encodeURIComponent(chatId)}">Открыть историю чата</a></p>`,
+            `<h1>Исход неизвестен</h1><p>Служба не записала исход предыдущей отправки. Повторный запуск не выполнялся.</p><p><a href="/legacy/chats/${encodeURIComponent(chatId)}">Открыть историю чата</a></p>`,
           );
         } else {
           const view = await host.readChat(chatId);
@@ -488,7 +509,7 @@ export function createServerApp(
         });
         if (result.status === 'started') {
           await opts.testHooks?.beforeStartRedirect?.();
-          res.writeHead(303, { Location: `/runs/${encodeURIComponent(result.runId)}` }).end();
+          res.writeHead(303, { Location: `/legacy/runs/${encodeURIComponent(result.runId)}` }).end();
           return;
         }
         if (result.status === 'notFound') send(res, 404, 'Проект не найден');
@@ -510,7 +531,7 @@ export function createServerApp(
         const runId = runStopMatch[1]!;
         const result = await host.stop(runId);
         if (result.status === 'ok') {
-          res.writeHead(303, { Location: `/runs/${encodeURIComponent(runId)}` }).end();
+          res.writeHead(303, { Location: `/legacy/runs/${encodeURIComponent(runId)}` }).end();
           return;
         }
         if (result.status === 'notFound') send(res, 404, 'Прогон не найден');
@@ -536,7 +557,7 @@ export function createServerApp(
         const runId = runDecisionMatch[1]!;
         const result = await host.decide(runId, decisionFromForm(new URLSearchParams(body.body)));
         if (result.status === 'ok') {
-          res.writeHead(303, { Location: `/runs/${encodeURIComponent(runId)}` }).end();
+          res.writeHead(303, { Location: `/legacy/runs/${encodeURIComponent(runId)}` }).end();
           return;
         }
         if (result.status === 'notFound') send(res, 404, 'Прогон не найден');

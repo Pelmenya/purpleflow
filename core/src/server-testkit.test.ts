@@ -98,7 +98,7 @@ export class Browser {
 }
 
 export function postDecision(browser: Browser, origin: string, runId: string, fields: Record<string, string>): Promise<Response> {
-  return browser.request(origin, `/runs/${runId}/decision`, {
+  return browser.request(origin, `/legacy/runs/${runId}/decision`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams(fields),
