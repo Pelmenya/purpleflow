@@ -258,6 +258,7 @@ export interface DictationStatus {
 }
 
 export interface PurpleFlowBridge {
+  web?: true;
   /** В этой сборке окно подключает отчёты об ошибках; отправку всё равно решает main. */
   reportsErrors: boolean;
   core: CoreApi;

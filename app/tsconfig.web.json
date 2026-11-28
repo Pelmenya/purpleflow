@@ -14,6 +14,13 @@
       "@purpleflow/route": ["../core/src/route.ts"]
     }
   },
-  "include": ["src/renderer/src/**/*", "src/shared/**/*", "src/preload/*.d.ts", "../core/src/route.ts", "../core/src/modes.ts"],
-  "exclude": ["src/renderer/src/**/*.test.ts"]
+  "include": [
+    "src/renderer/src/**/*",
+    "src/web/**/*",
+    "src/shared/**/*",
+    "src/preload/*.d.ts",
+    "../core/src/route.ts",
+    "../core/src/modes.ts"
+  ],
+  "exclude": ["src/renderer/src/**/*.test.ts", "src/web/**/*.test.ts"]
 }
