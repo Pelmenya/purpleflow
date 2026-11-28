@@ -26,6 +26,8 @@ npm run build:core
 ```bash
 mkdir -p "$HOME/.config/purpleflow-server" "$HOME/.local/state/purpleflow-server"
 chmod 700 "$HOME/.local/state/purpleflow-server"
+install -d -m 700 "$HOME/.local/state/purpleflow-server/data"
+test "$(stat -c '%a' "$HOME/.local/state/purpleflow-server/data")" = 700
 node -e 'require("node:fs").writeFileSync(process.argv[1], require("node:crypto").randomBytes(32).toString("base64url") + "\n", { mode: 0o600 })' "$HOME/.config/purpleflow-server/secret"
 cp docs/server/config.example.json "$HOME/.config/purpleflow-server/config.json"
 chmod 600 "$HOME/.config/purpleflow-server/config.json"
@@ -34,7 +36,7 @@ chmod 600 "$HOME/.config/purpleflow-server/config.json"
 Отредактируйте `config.json` и замените все плейсхолдеры:
 
 - `__CHECKOUT__` — абсолютный путь к этому checkout;
-- `__DATA_DIR__` — например, `/home/<пользователь>/.local/state/purpleflow-server/data`; каталог данных службы должен быть отдельным, иметь владельца-пользователя службы и права `0700`;
+- `__DATA_DIR__` — например, `/home/<пользователь>/.local/state/purpleflow-server/data`; каталог данных службы должен быть отдельным, иметь владельца-пользователя службы и права `0700`. При другом значении `__DATA_DIR__` подставьте тот же абсолютный путь вместо `$HOME/.local/state/purpleflow-server/data` в обе команды: `install` и проверку через `stat`;
 - `__PROJECT_DIR__` — абсолютный путь к подготовленному git-проекту;
 - `__SECRET_FILE__` — абсолютный путь к созданному `secret`;
 - `__CLAUDE__` и `__CODEX__` — абсолютные пути к установленным CLI; неиспользуемый `codex` можно удалить из `toolPaths`, если ревьюером назначен `claude`.
