@@ -4,12 +4,15 @@ import net from 'node:net';
 import path from 'node:path';
 import { ShuttingDownError } from '../kernel.js';
 import { gateMessage } from '../gates.js';
+import type { CoreApi } from '../model/api.js';
+import type { CoreEvent } from '../model/protocol.js';
 import type { Orchestrator } from '../orchestrator.js';
 import { killPid } from '../proc.js';
 import type { CoreOptions, Listener } from '../runtime.js';
 import { isGate } from '../stage-info.js';
 import { RunStore, writeAtomic } from '../store.js';
 import type { ChangeDocs, ChatFile, ChatSummary, CoreSettings, DiffFile, GateId, RunFile, RunStatus, StageId } from '../types.js';
+import { AccessError, admitCall, admitEvent, createAccessContext, filterResult, redactSecrets } from './access.js';
 import { attentionIntent, type AttentionIntent } from './attention.js';
 import type { ServerProject } from './config.js';
 import type { ExpectedDecision } from './decisions.js';
@@ -56,6 +59,8 @@ export type SendChatResult =
 
 export interface Host {
   readonly dataDir: string;
+  callCore(method: keyof CoreApi, args: unknown[]): Promise<unknown>;
+  onCoreEvent(fn: (event: CoreEvent) => void): () => void;
   snapshot(): Promise<HostSnapshot>;
   startTask(projectId: string, input: { task: string; submissionId: string }): Promise<StartTaskResult>;
   listChats(projectId: string): Promise<ChatSummary[] | null>;
@@ -182,6 +187,13 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
       runners: opts.runners,
     });
     const runningCore = core;
+    const access = createAccessContext({ dataDir: realDataDir, allowProject });
+    const secrets = [
+      opts.settings.proxy.apiKey,
+      ...Object.entries(opts.agentEnv)
+        .filter(([name, value]) => /KEY|TOKEN|SECRET|PASSWORD/.test(name) && value !== undefined && value.length >= 8)
+        .map(([, value]) => value!),
+    ].filter(Boolean);
     const readAllowedRun = (id: string): RunFile | null => {
       const run = runningCore.kernel.store.load(id);
       return run && allowProject(run.projectPath) ? run : null;
@@ -335,6 +347,30 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
     let closing: Promise<void> | undefined;
     return {
       dataDir: realDataDir,
+      callCore(method, args) {
+        if (hostClosing) throw new ShuttingDownError();
+        operationStarted();
+        return (async () => {
+          try {
+            admitCall(access, method, args);
+            const target: unknown = Reflect.get(runningCore, method);
+            if (typeof target !== 'function') throw new Error(`Неизвестный метод ядра: ${method}`);
+            const result = await Reflect.apply(target, runningCore, args);
+            return redactSecrets(filterResult(access, method, result), secrets);
+          } catch (error) {
+            if (error instanceof ShuttingDownError || error instanceof AccessError) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            throw new Error(redactSecrets(message, secrets));
+          } finally {
+            operationFinished();
+          }
+        })();
+      },
+      onCoreEvent(fn) {
+        return runningCore.on((event) => {
+          if (admitEvent(access, event)) fn(redactSecrets(event, secrets));
+        });
+      },
       async snapshot() {
         const runs = await runningCore.listRuns();
         const summaries = await Promise.all(

@@ -209,6 +209,12 @@ test('обзор: название прогона с <script> выводится
   const config = configFor(root, path.join(root, 'project'));
   const host: Host = {
     dataDir: config.dataDir,
+    async callCore() {
+      throw new Error('не реализовано');
+    },
+    onCoreEvent() {
+      return () => {};
+    },
     async snapshot() {
       return {
         projects: [{ id: 'project', name: 'Проект <img src=x onerror=alert(1)>' }],
@@ -385,6 +391,12 @@ async function assertPortFree(port: number): Promise<void> {
 function stubHost(overrides: Partial<Host> = {}): Host {
   return {
     dataDir: '/nonexistent',
+    async callCore() {
+      throw new Error('не реализовано');
+    },
+    onCoreEvent() {
+      return () => {};
+    },
     async snapshot() {
       return { projects: [], runs: [] };
     },
