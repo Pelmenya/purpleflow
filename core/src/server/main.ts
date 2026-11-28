@@ -5,7 +5,7 @@ import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
 import type { ChangeDocs, ChatFile, ChatSummary, DiffFile, RunFile } from '../types.js';
 import { renderAcceptance } from './accept-page.js';
-import { closeAllStreams, closeSessionStreams, createBridgeHandler } from './bridge-http.js';
+import { createBridgeHandler } from './bridge-http.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
@@ -392,7 +392,7 @@ export function createServerApp(
           send(res, 503, 'Хранилище сессий недоступно');
           return;
         }
-        closeSessionStreams(token);
+        bridge.closeSessionStreams(token);
         res.writeHead(303, { Location: '/', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
         return;
       }
@@ -407,7 +407,7 @@ export function createServerApp(
           send(res, 503, 'Хранилище сессий недоступно');
           return;
         }
-        closeAllStreams();
+        bridge.closeAllStreams();
         res.writeHead(303, { Location: '/login', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
         return;
       }

@@ -81,11 +81,17 @@ function eventText(id: string, event: CoreEvent): string {
   return `id: ${id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
+export interface BridgeHandler {
+  (req: IncomingMessage, res: ServerResponse): Promise<boolean>;
+  closeSessionStreams(token: string): void;
+  closeAllStreams(): void;
+}
+
 export function createBridgeHandler(
   config: ServerConfig,
   host: Host,
   opts: { expiresAt?: (token: string) => number | undefined; now?: () => number } = {},
-): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+): BridgeHandler {
   const epoch = randomBytes(16).toString('hex');
   const streams = new Set<Stream>();
   const buffer: { sequence: number; text: string; bytes: number }[] = [];
@@ -116,24 +122,13 @@ export function createBridgeHandler(
       return;
     }
 
+    const token = requestToken(req);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
       Connection: 'keep-alive',
     });
     res.flushHeaders();
-    const lastEventId = req.headers['last-event-id'];
-    if (lastEventId !== undefined) {
-      const match = typeof lastEventId === 'string' ? new RegExp(`^${epoch}-(\\d+)$`).exec(lastEventId) : null;
-      const replayAfter = match ? Number(match[1]) : 0;
-      if (match && buffer.some((event) => event.sequence === replayAfter)) {
-        for (const event of buffer) if (event.sequence > replayAfter) res.write(event.text);
-      } else {
-        res.write('event: reset\ndata: {}\n\n');
-      }
-    }
-
-    const token = requestToken(req);
     const stream: Stream = {
       token,
       res,
@@ -147,6 +142,18 @@ export function createBridgeHandler(
       closeStream(stream);
       return;
     }
+
+    const lastEventId = req.headers['last-event-id'];
+    if (lastEventId !== undefined) {
+      const match = typeof lastEventId === 'string' ? new RegExp(`^${epoch}-(\\d+)$`).exec(lastEventId) : null;
+      const replayAfter = match ? Number(match[1]) : 0;
+      if (match && buffer.some((event) => event.sequence === replayAfter)) {
+        for (const event of buffer) if (event.sequence > replayAfter) res.write(event.text);
+      } else {
+        res.write('event: reset\ndata: {}\n\n');
+      }
+    }
+
     if (expiresAt !== undefined) {
       const delay = Math.max(0, expiresAt - (opts.now?.() ?? Date.now()));
       stream.expiration = setTimeout(() => closeStream(stream), delay);
@@ -162,7 +169,7 @@ export function createBridgeHandler(
     });
   };
 
-  return async (req, res) => {
+  const handler = async (req: IncomingMessage, res: ServerResponse): Promise<boolean> => {
     const route = new URL(req.url ?? '/', 'http://localhost').pathname;
     const method = req.method ?? '';
     if (route === '/api/settings' && method === 'GET') {
@@ -212,4 +219,12 @@ export function createBridgeHandler(
     }
     return true;
   };
+  return Object.assign(handler, {
+    closeSessionStreams(token: string): void {
+      for (const stream of streams) if (stream.token === token) closeStream(stream);
+    },
+    closeAllStreams(): void {
+      for (const stream of streams) closeStream(stream);
+    },
+  });
 }
