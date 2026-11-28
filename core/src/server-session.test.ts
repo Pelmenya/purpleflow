@@ -1,3 +1,4 @@
+import './server/web-assets.js';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import http from 'node:http';
@@ -299,4 +300,15 @@ test('возврат: /runs/<UUID> принят; //attacker.example, https://x, 
   registerReturnRoute(/^\/logs\/[a-z0-9-]+$/);
   assert.equal(isReturnRoute('/logs/main'), '/logs/main');
   assert.equal(isReturnRoute('/logs/../main'), '/');
+});
+
+test('возврат: точки внутри проекта допустимы, обход сегмента и испорченная кодировка отклонены', () => {
+  assert.equal(isReturnRoute('/projects/%2Ftmp%2Frepo..demo'), '/projects/%2Ftmp%2Frepo..demo');
+  assert.equal(isReturnRoute('/chats?project=%2Ftmp%2Frepo..demo'), '/chats?project=%2Ftmp%2Frepo..demo');
+  assert.equal(isReturnRoute('/chats?project=%2Ftmp%2F%D0%BF'), '/chats?project=%2Ftmp%2F%D0%BF');
+  assert.equal(isReturnRoute('/chats?project=x&evil=1'), '/chats');
+  assert.equal(isReturnRoute('/chats?other=1'), '/chats');
+  for (const unsafe of ['/projects/..', '/projects/%2E%2E', '/runs/../x', '//evil', '/a\\b', '/projects/%E0%A4%A']) {
+    assert.equal(isReturnRoute(unsafe), '/', unsafe);
+  }
 });

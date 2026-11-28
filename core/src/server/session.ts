@@ -90,7 +90,8 @@ function sessionToken(req: IncomingMessage): string | undefined {
 
 function requestPath(url: string | undefined): string {
   try {
-    return new URL(url ?? '/', 'http://localhost').pathname;
+    const parsed = new URL(url ?? '/', 'http://localhost');
+    return `${parsed.pathname}${parsed.search}`;
   } catch {
     return '/';
   }
@@ -172,14 +173,28 @@ export function checkOrigin(req: IncomingMessage, publicOrigin: string): boolean
 const returnRoutes = [...WINDOW_ROUTES];
 
 export function isReturnRoute(path: string): string {
-  if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\') || path.includes('..')) return '/';
-  for (const route of returnRoutes) {
-    route.lastIndex = 0;
-    const matches = route.test(path);
-    route.lastIndex = 0;
-    if (matches) return path;
+  if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) return '/';
+  try {
+    const rawPath = path.split(/[?#]/, 1)[0] ?? '';
+    for (const segment of rawPath.split('/')) {
+      const decoded = decodeURIComponent(segment);
+      if (decoded === '.' || decoded === '..') return '/';
+    }
+    const url = new URL(path, 'http://localhost');
+    decodeURIComponent(url.search);
+    const matches = returnRoutes.some((route) => {
+      route.lastIndex = 0;
+      const result = route.test(url.pathname);
+      route.lastIndex = 0;
+      return result;
+    });
+    if (!matches) return '/';
+    const [key, value] = url.searchParams.entries().next().value ?? [];
+    const keepProject = key === 'project' && Boolean(value) && url.searchParams.size === 1;
+    return `${url.pathname}${keepProject ? url.search : ''}`;
+  } catch {
+    return '/';
   }
-  return '/';
 }
 
 export function registerReturnRoute(re: RegExp): void {

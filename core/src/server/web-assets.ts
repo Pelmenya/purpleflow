@@ -10,6 +10,10 @@ export const WINDOW_ROUTES = [
   /^\/$/,
   /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
   /^\/runs\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/log$/i,
+  /^\/settings(?:\/(?:account|stats|tools|models|window))?$/,
+  /^\/start$/,
+  /^\/chats(?:\/[^/]+)?$/,
+  /^\/projects(?:\/[^/]+(?:\/(?:overview|commands|knowledge|git))?)?$/,
 ];
 
 export const DEFAULT_WEB_DIR = fileURLToPath(new URL('../../../app/out/web', import.meta.url));

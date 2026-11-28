@@ -7,7 +7,7 @@ export type SettingsTab = 'account' | 'stats' | 'tools' | 'models' | 'window';
 export type View =
   /** review — открыть сразу в режиме «Ревью кода» с выбранной целью (из вкладки «Git»). */
   | { name: 'new'; project?: string; draft?: NextPartDraft; review?: ReviewTarget }
-  | { name: 'run'; runId: string }
+  | { name: 'run'; runId: string; tab?: 'log' }
   /** tab — открыть сразу на этой вкладке (например, «Аккаунт» для входа в PurpleSchool). */
   | { name: 'settings'; tab?: SettingsTab }
   | { name: 'welcome' }

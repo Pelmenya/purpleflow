@@ -69,14 +69,15 @@ test('веб: вход и ресурсы публичны, маршруты ок
   assert.equal(asset.headers.get('content-type'), 'text/javascript; charset=utf-8');
   assert.equal(asset.headers.get('x-content-type-options'), 'nosniff');
 
-  for (const route of ['/', `/runs/${runId}`]) {
+  const projectRoute = '/projects/%2Ftmp%2Frepo..demo/git';
+  for (const route of ['/', `/runs/${runId}`, '/settings/models', '/chats/c1', projectRoute]) {
     const response = await browser.request(origin, route);
     assert.equal(response.status, 303);
     assert.equal(new URL(response.headers.get('location') ?? '', origin).searchParams.get('returnTo'), route);
   }
 
   assert.equal((await browser.login(origin)).status, 303);
-  for (const route of ['/', `/runs/${runId}`, `/runs/${runId}/log`]) {
+  for (const route of ['/', `/runs/${runId}`, `/runs/${runId}/log`, '/settings/models', '/chats/c1', projectRoute]) {
     const response = await browser.request(origin, route);
     assertWindowHtml(response, await response.text());
   }
@@ -142,6 +143,19 @@ test('веб: служба отклоняет непроверенный returnT
   });
   assert.equal(response.status, 303);
   assert.equal(response.headers.get('location'), '/');
+});
+
+test('веб: returnTo сохраняет единственный параметр project при переадресации и входе', { skip: serverTestsSkip }, async (t) => {
+  const { origin } = await webFixture(t);
+  const browser = new Browser();
+  const returnTo = '/chats?project=%2Ftmp%2Frepo..demo';
+  const redirect = await browser.request(origin, returnTo);
+  assert.equal(redirect.status, 303);
+  assert.equal(new URL(redirect.headers.get('location') ?? '', origin).searchParams.get('returnTo'), returnTo);
+
+  const login = await browser.login(origin, returnTo);
+  assert.equal(login.status, 303);
+  assert.equal(login.headers.get('location'), returnTo);
 });
 
 test('веб: формы приёмки старой страницы ведут под /legacy', { skip: serverTestsSkip }, async (t) => {

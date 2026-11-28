@@ -91,7 +91,7 @@ export function App() {
           )}
           {v.name === 'projects' && <ProjectsScreen />}
           {v.name === 'project' && <ProjectScreen path={v.path} initialTab={v.tab} />}
-          {v.name === 'run' && <RunScreen runId={v.runId} />}
+          {v.name === 'run' && <RunScreen runId={v.runId} tab={v.tab} />}
           {v.name === 'settings' && <SettingsScreen />}
           {v.name === 'chat' && <ChatScreen chatId={v.chatId} initialProject={v.project} initialText={v.text} />}
         </div>
