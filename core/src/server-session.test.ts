@@ -1,15 +1,32 @@
 import './server/web-assets.js';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { test, type TestContext } from 'node:test';
-import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './server/session.js';
+import { startService } from './server/main.js';
+import { hashSecret } from './server/secret.js';
+import { readLoginSecret } from './server/secret.js';
+import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody, sessionsFor } from './server/session.js';
+import { configFor, serverTestsSkip, startTestHost } from './server-testkit.test.js';
+
+const SECRET = 'секрет';
+const SECRET_HASH = hashSecret(SECRET);
+const SESSION_TTL = 12 * 60 * 60 * 1000;
+
+function tempDir(t: TestContext): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pf-server-session-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 test('сессия: два независимых входа действуют одновременно', () => {
-  const sessions = createSessions({ secret: 'секрет' });
-  const first = sessions.login('секрет');
-  const second = sessions.login('секрет');
+  const sessions = createSessions({ secret: SECRET });
+  const first = sessions.login(SECRET);
+  const second = sessions.login(SECRET);
 
   assert.equal(first.kind, 'token');
   assert.equal(second.kind, 'token');
@@ -20,49 +37,148 @@ test('сессия: два независимых входа действуют 
   assert.equal(sessions.validate(second.token), true);
 });
 
-test('сессия: истекает через 12 часов по подставным часам', () => {
+test('сессия: абсолютный срок и хеш токена сохраняются после рестарта', (t) => {
+  const file = path.join(tempDir(t), 'server', 'sessions.json');
   let now = 1_000_000;
-  const sessions = createSessions({ secret: 'секрет', now: () => now });
-  const result = sessions.login('секрет');
+  const sessions = createSessions({ secretHash: SECRET_HASH, file, now: () => now });
+  const result = sessions.login(SECRET);
   assert.equal(result.kind, 'token');
   if (result.kind !== 'token') return;
+  assert.equal(result.maxAgeSec, SESSION_TTL / 1000);
+  assert.equal(sessions.expiresAt(result.token), now + SESSION_TTL);
+  assert.equal(fs.readFileSync(file, 'utf8').includes(result.token), false);
 
-  now += 12 * 60 * 60 * 1000 - 1;
-  assert.equal(sessions.validate(result.token), true);
+  const restarted = createSessions({ secretHash: SECRET_HASH, file, now: () => now });
+  now += SESSION_TTL - 1;
+  assert.equal(restarted.validate(result.token), true);
+  assert.equal(restarted.expiresAt(result.token), 1_000_000 + SESSION_TTL);
   now += 1;
-  assert.equal(sessions.validate(result.token), false);
+  assert.equal(restarted.validate(result.token), false);
+  assert.equal(restarted.expiresAt(result.token), undefined);
 });
 
-test('сессия: выход отзывает только текущую, новый экземпляр не принимает старый идентификатор', () => {
-  const sessions = createSessions({ secret: 'секрет' });
-  const first = sessions.login('секрет');
-  const second = sessions.login('секрет');
-  assert.equal(first.kind, 'token');
-  assert.equal(second.kind, 'token');
-  if (first.kind !== 'token' || second.kind !== 'token') return;
+test('сессия: выход отзывает только текущую, выход везде отзывает все и переживает рестарт', (t) => {
+  const file = path.join(tempDir(t), 'sessions.json');
+  const sessions = createSessions({ secretHash: SECRET_HASH, file });
+  const first = tokenOf(sessions.login(SECRET));
+  const second = tokenOf(sessions.login(SECRET));
 
-  sessions.logout(first.token);
-  assert.equal(sessions.validate(first.token), false);
-  assert.equal(sessions.validate(second.token), true);
+  sessions.logout(first);
+  assert.equal(sessions.validate(first), false);
+  assert.equal(sessions.validate(second), true);
+  const restarted = createSessions({ secretHash: SECRET_HASH, file });
+  assert.equal(restarted.validate(first), false);
+  assert.equal(restarted.validate(second), true);
 
-  const restarted = createSessions({ secret: 'секрет' });
-  assert.equal(restarted.validate(first.token), false);
-  assert.equal(restarted.validate(second.token), false);
+  restarted.logoutAll();
+  const afterLogoutAll = createSessions({ secretHash: SECRET_HASH, file });
+  assert.equal(afterLogoutAll.validate(first), false);
+  assert.equal(afterLogoutAll.validate(second), false);
 });
 
-test('сессия: неверный секрет — invalid, шестой неверный вход за минуту — rateLimited, через минуту по подставным часам снова invalid', () => {
+test('сессия: десятая неудача блокирует вход на 15 минут, верный секрет тоже отклонён', () => {
   let now = 50_000;
   const sessions = createSessions({ secret: 'правильно', now: () => now });
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    assert.deepEqual(sessions.login('неверно'), { kind: 'invalid' });
-  }
-  assert.deepEqual(sessions.login('неверно'), { kind: 'rateLimited', retryAfterSec: 60 });
+  for (let attempt = 0; attempt < 9; attempt++) assert.deepEqual(sessions.login('неверно'), { kind: 'invalid' });
+  assert.deepEqual(sessions.login('неверно'), { kind: 'rateLimited', retryAfterSec: 900 });
+  assert.deepEqual(sessions.login('правильно'), { kind: 'rateLimited', retryAfterSec: 900 });
 
-  now += 30_000;
-  assert.deepEqual(sessions.login('неверно'), { kind: 'rateLimited', retryAfterSec: 30 });
-  now += 30_000;
-  assert.deepEqual(sessions.login('неверно'), { kind: 'invalid' });
+  now += 450_000;
+  assert.deepEqual(sessions.login('правильно'), { kind: 'rateLimited', retryAfterSec: 450 });
+  now += 450_000;
+  assert.equal(sessions.login('правильно').kind, 'token');
+});
+
+test('сессия: успешный вход до блокировки обнуляет счётчик неудач', () => {
+  const sessions = createSessions({ secret: 'правильно' });
+  for (let attempt = 0; attempt < 9; attempt++) assert.equal(sessions.login('неверно').kind, 'invalid');
+  assert.equal(sessions.login('правильно').kind, 'token');
+  for (let attempt = 0; attempt < 9; attempt++) assert.equal(sessions.login('неверно').kind, 'invalid');
+  assert.equal(sessions.login('неверно').kind, 'rateLimited');
+});
+
+test('сессия: другой секрет отзывает старый токен без изменения файла при создании', (t) => {
+  const file = path.join(tempDir(t), 'sessions.json');
+  const sessions = createSessions({ secretHash: SECRET_HASH, file });
+  const token = tokenOf(sessions.login(SECRET));
+  const before = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+
+  const changed = createSessions({ secret: 'другой секрет', file });
+  assert.equal(changed.validate(token), false);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+});
+
+test('сессия: файл сохраняет права 0600 при повторной записи с umask 022', (t) => {
+  const file = path.join(tempDir(t), 'sessions.json');
+  const previous = process.umask(0o022);
+  t.after(() => process.umask(previous));
+  const sessions = createSessions({ secretHash: SECRET_HASH, file });
+  const first = tokenOf(sessions.login(SECRET));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  tokenOf(sessions.login(SECRET));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  sessions.logout(first);
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+});
+
+test('сессия: sessionsFor создаёт каталог server только при первом входе', (t) => {
+  const dataDir = tempDir(t);
+  const project = path.join(dataDir, 'project');
+  fs.mkdirSync(project);
+  const config = configFor(dataDir, { id: 'project', path: project });
+  const file = path.join(dataDir, 'server', 'sessions.json');
+  assert.equal(fs.existsSync(path.dirname(file)), false);
+  const sessions = sessionsFor(config);
+  assert.equal(fs.existsSync(file), false);
+
+  const token = tokenOf(sessions.login('секрет владельца'));
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  const restarted = sessionsFor(config);
+  assert.equal(restarted.validate(token), true);
+});
+
+test('сессия: второй startService с другим секретом не меняет хранилище до отказа dataDir', { skip: serverTestsSkip }, async (t) => {
+  const stand = await startTestHost();
+  await stand.close();
+  const config = configFor(stand.dataDir, stand.project, stand.settings);
+  const file = path.join(stand.dataDir, 'server', 'sessions.json');
+  const seeded = createSessions({ secretHash: readLoginSecret(config.secretFile), file });
+  tokenOf(seeded.login('секрет владельца'));
+  const before = fs.readFileSync(file);
+  const mtime = fs.statSync(file).mtimeMs;
+
+  const first = await startService(config);
+  t.after(() => first.stop());
+  await first.ready;
+  const otherSecret = path.join(stand.dataDir, 'other-secret');
+  fs.writeFileSync(otherSecret, hashSecret('другой секрет'), { mode: 0o600 });
+  const second = await startService({ ...config, secretFile: otherSecret });
+  t.after(() => second.stop().catch(() => {}));
+  await assert.rejects(second.ready, /Каталог данных уже обслуживается/);
+  assert.deepEqual(fs.readFileSync(file), before);
+  assert.equal(fs.statSync(file).mtimeMs, mtime);
+});
+
+test('сессия: сбой записи не меняет память и не выдаёт новый токен', (t) => {
+  const file = path.join(tempDir(t), 'sessions.json');
+  const sessions = createSessions({ secretHash: SECRET_HASH, file });
+  const first = tokenOf(sessions.login(SECRET));
+  const saved = fs.readFileSync(file);
+  fs.rmSync(file);
+  fs.mkdirSync(path.join(file, 'nonempty'), { recursive: true });
+
+  assert.deepEqual(sessions.login(SECRET), { kind: 'unavailable' });
+  assert.throws(() => sessions.logout(first));
+  assert.throws(() => sessions.logoutAll());
+  assert.equal(sessions.validate(first), true);
+
+  fs.rmSync(file, { recursive: true });
+  fs.writeFileSync(file, saved, { mode: 0o600 });
+  const restarted = createSessions({ secretHash: SECRET_HASH, file });
+  assert.equal(restarted.validate(first), true);
 });
 
 async function listen(t: TestContext, handler: http.RequestListener) {
@@ -152,6 +268,10 @@ test('защита: чужой Origin, неверный секрет и прот
       }
       if (result.kind === 'rateLimited') {
         res.writeHead(429).end();
+        return;
+      }
+      if (result.kind === 'unavailable') {
+        res.writeHead(503).end();
         return;
       }
       coreCalls++;

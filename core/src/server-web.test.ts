@@ -123,12 +123,12 @@ test('веб: без сборки окно сообщает о build:web, зап
   assert.match(await missing.text(), /npm run build:web/);
 
   const limitedBrowser = new Browser();
-  for (let attempt = 0; attempt < 6; attempt++) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     const response = await limitedBrowser.request(origin, '/login', {
       method: 'POST',
       body: new URLSearchParams({ secret: 'неверно', returnTo: '/' }),
     });
-    assert.equal(response.status, attempt < 5 ? 401 : 429);
+    assert.equal(response.status, attempt < 9 ? 401 : 429);
     assert.equal(response.headers.get('content-security-policy'), LOGIN_CSP);
   }
 });

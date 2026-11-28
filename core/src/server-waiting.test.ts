@@ -228,8 +228,7 @@ test('обзор: ожидания с причиной после рестарт
   const secondServer = await openServer(createServerApp(configFor(second.dataDir, second.project), second.host));
   t.after(secondServer.close);
   const oldSession = await browser.request(secondServer.origin, '/legacy/');
-  assert.equal(oldSession.status, 303);
-  assert.equal((await browser.login(secondServer.origin)).status, 303);
+  assert.equal(oldSession.status, 200);
 
   const response = await browser.request(secondServer.origin, '/api/overview');
   assert.equal(response.status, 200);

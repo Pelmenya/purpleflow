@@ -328,7 +328,7 @@ test('обзор: чужой id прогона — 404', linux, async (t) => {
 });
 
 test(
-  'вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, шестой неверный вход 429 — ядро не вызвано',
+  'вход: чужой Origin 403, неверный секрет 401, тело больше лимита 413 у клиента, десятый неверный вход 429 — ядро не вызвано',
   linux,
   async (t) => {
     const { host, origin } = await overviewFixture(t);
@@ -358,7 +358,7 @@ test(
     tooLarge.resume();
     await once(tooLarge, 'end');
 
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       assert.equal((await jar.login(origin, '/', 'неверно')).status, 401);
     }
     const limited = await jar.login(origin, '/', 'неверно');
@@ -484,6 +484,24 @@ test('служба: небезопасный секрет — отказ без 
   );
   assert.equal(hostCalls, 0);
   await assertPortFree(port);
+});
+
+test('служба: слушает только IPv4 loopback', linux, async (t) => {
+  const root = tempRoot(t);
+  const project = path.join(root, 'project');
+  fs.mkdirSync(project);
+  const config = configFor(root, project, await freePort());
+  const listen = http.Server.prototype.listen;
+  let boundHost = '';
+  t.mock.method(http.Server.prototype, 'listen', function (this: http.Server, port: number, hostname: string) {
+    boundHost = hostname;
+    return Reflect.apply(listen, this, [port, hostname]) as http.Server;
+  } as typeof http.Server.prototype.listen);
+
+  const service = await startService(config, { startHost: async () => stubHost() });
+  t.after(() => service.stop());
+  await service.ready;
+  assert.equal(boundHost, '127.0.0.1');
 });
 
 test('служба: хост получает agentEnv из buildAgentEnv', linux, async (t) => {

@@ -17,6 +17,7 @@ interface Stream {
   token: string;
   res: ServerResponse;
   ping: NodeJS.Timeout;
+  expiration?: NodeJS.Timeout;
 }
 
 const allStreams = new Set<Stream>();
@@ -43,6 +44,7 @@ function requestToken(req: IncomingMessage): string {
 
 function closeStream(stream: Stream): void {
   clearInterval(stream.ping);
+  if (stream.expiration) clearTimeout(stream.expiration);
   if (!stream.res.destroyed) stream.res.end();
 }
 
@@ -79,7 +81,11 @@ function eventText(id: string, event: CoreEvent): string {
   return `id: ${id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 }
 
-export function createBridgeHandler(config: ServerConfig, host: Host): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
+export function createBridgeHandler(
+  config: ServerConfig,
+  host: Host,
+  opts: { expiresAt?: (token: string) => number | undefined; now?: () => number } = {},
+): (req: IncomingMessage, res: ServerResponse) => Promise<boolean> {
   const epoch = randomBytes(16).toString('hex');
   const streams = new Set<Stream>();
   const buffer: { sequence: number; text: string; bytes: number }[] = [];
@@ -127,18 +133,26 @@ export function createBridgeHandler(config: ServerConfig, host: Host): (req: Inc
       }
     }
 
+    const token = requestToken(req);
     const stream: Stream = {
-      token: requestToken(req),
+      token,
       res,
       ping: setInterval(() => {
         if (!res.destroyed) res.write(': ping\n\n');
       }, 25_000),
     };
     stream.ping.unref();
+    const expiresAt = opts.expiresAt?.(token);
+    if (expiresAt !== undefined) {
+      const delay = Math.max(0, expiresAt - (opts.now?.() ?? Date.now()));
+      stream.expiration = setTimeout(() => closeStream(stream), delay);
+      stream.expiration.unref();
+    }
     streams.add(stream);
     allStreams.add(stream);
     res.once('close', () => {
       clearInterval(stream.ping);
+      if (stream.expiration) clearTimeout(stream.expiration);
       streams.delete(stream);
       allStreams.delete(stream);
     });

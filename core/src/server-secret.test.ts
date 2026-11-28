@@ -39,13 +39,16 @@ test('команда hash-secret: печатает секрет один раз 
   const file = path.join(dir, 'secret');
   const output: string[] = [];
   const errors: string[] = [];
-  const log = console.log;
+  const write = process.stdout.write;
   const error = console.error;
   const previousExitCode = process.exitCode;
-  console.log = (value: unknown) => output.push(String(value));
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    output.push(String(chunk).trim());
+    return true;
+  }) as typeof process.stdout.write;
   console.error = (value: unknown) => errors.push(String(value));
   t.after(() => {
-    console.log = log;
+    process.stdout.write = write;
     console.error = error;
     process.exitCode = previousExitCode;
   });

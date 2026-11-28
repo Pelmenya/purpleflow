@@ -5,15 +5,15 @@ import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
 import type { ChangeDocs, ChatFile, ChatSummary, DiffFile, RunFile } from '../types.js';
 import { renderAcceptance } from './accept-page.js';
-import { createBridgeHandler } from './bridge-http.js';
+import { closeAllStreams, closeSessionStreams, createBridgeHandler } from './bridge-http.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
 import type { Host, HostSnapshot, StartTaskResult } from './host.js';
 import type { ExpectedDecision } from './decisions.js';
-import { checkOrigin, createSessions, isReturnRoute, readBody, registerReturnRoute, rejectBody } from './session.js';
+import { checkOrigin, isReturnRoute, readBody, registerReturnRoute, rejectBody, sessionsFor } from './session.js';
 import type { Sessions } from './session.js';
-import { createLoginSecret, readLoginSecret } from './secret.js';
+import { createLoginSecret } from './secret.js';
 import { startTelegram } from './telegram.js';
 import type { TelegramHandle } from './telegram.js';
 import { createWebAssets, isWindowRoute, LOGIN_CSP } from './web-assets.js';
@@ -268,6 +268,7 @@ const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, rea
   ['/api/events', readMethods],
   ['/login', ['GET', 'POST']],
   ['/logout', ['POST']],
+  ['/logout/all', ['POST']],
   ['/legacy/settings', readMethods],
   ['/legacy/settings/telegram/probe', ['POST']],
 ]);
@@ -312,8 +313,8 @@ export function createServerApp(
     };
   } = {},
 ): RequestListener {
-  const sessions = opts.sessions ?? createSessions({ secretHash: readLoginSecret(config.secretFile), now: opts.now });
-  const bridge = createBridgeHandler(config, host);
+  const sessions = opts.sessions ?? sessionsFor(config, opts.now);
+  const bridge = createBridgeHandler(config, host, { expiresAt: sessions.expiresAt, now: opts.now });
   const webAssets = createWebAssets(config.webDir);
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
@@ -367,6 +368,10 @@ export function createServerApp(
           html(res, 429, loginPage(returnTo, 'Слишком много попыток'), { 'Retry-After': String(result.retryAfterSec) });
           return;
         }
+        if (result.kind === 'unavailable') {
+          send(res, 503, 'Хранилище сессий недоступно');
+          return;
+        }
         res
           .writeHead(303, {
             Location: returnTo,
@@ -380,8 +385,30 @@ export function createServerApp(
           send(res, 403, 'Запрещено');
           return;
         }
-        sessions.logout(sessionToken(req));
+        const token = sessionToken(req);
+        try {
+          sessions.logout(token);
+        } catch {
+          send(res, 503, 'Хранилище сессий недоступно');
+          return;
+        }
+        closeSessionStreams(token);
         res.writeHead(303, { Location: '/', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
+        return;
+      }
+      if (route === '/logout/all' && method === 'POST') {
+        if (!checkOrigin(req, config.publicOrigin)) {
+          send(res, 403, 'Запрещено');
+          return;
+        }
+        try {
+          sessions.logoutAll();
+        } catch {
+          send(res, 503, 'Хранилище сессий недоступно');
+          return;
+        }
+        closeAllStreams();
+        res.writeHead(303, { Location: '/login', 'Set-Cookie': 'pf_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0' }).end();
         return;
       }
       if (route === '/legacy/settings' && method === 'GET') {
@@ -614,7 +641,7 @@ export async function startService(
   deps: { startHost?: typeof startServerHost; startTelegram?: typeof startTelegram; now?: () => number } = {},
 ): Promise<Service> {
   const now = deps.now;
-  const sessions = createSessions({ secretHash: readLoginSecret(config.secretFile), now });
+  const sessions = sessionsFor(config, now);
   const telegramToken = config.telegram ? readSecret(config.telegram.tokenFile) : undefined;
   const agentEnv = buildAgentEnv();
   const starter = deps.startHost ?? startServerHost;
@@ -737,7 +764,7 @@ export async function main(argv: string[]): Promise<void> {
   if (argv[0] === 'hash-secret') {
     try {
       if (argv.length !== 2 || !argv[1]) throw new Error('Использование: main.js hash-secret <файл>');
-      console.log(createLoginSecret(argv[1]));
+      process.stdout.write(`${createLoginSecret(argv[1])}\n`);
       process.exitCode = 0;
     } catch (error) {
       report(error);

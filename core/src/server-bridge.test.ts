@@ -7,6 +7,7 @@ import type { CoreEvent } from './types.js';
 import { Browser, PUBLIC_ORIGIN, configFor, listen, serverTestsSkip, startTestHost, waitingRunFixture } from './server-testkit.test.js';
 import { createServerApp } from './server/main.js';
 import { closeAllStreams, closeSessionStreams } from './server/bridge-http.js';
+import { createSessions } from './server/session.js';
 
 const linux = { skip: serverTestsSkip };
 
@@ -357,4 +358,122 @@ test('мост: close ждёт принятый вызов и отклоняет
     error: { code: 'shutting-down', message: 'Служба останавливается' },
   });
   assert.equal(calls, 1);
+});
+
+test('выход: POST /logout закрывает поток своей сессии и отзывает cookie', linux, async (t) => {
+  const { origin, browser } = await fixture(t);
+  const stream = new SseClient(await openEvents(browser, origin));
+
+  const response = await browser.request(origin, '/logout', { method: 'POST' });
+  assert.equal(response.status, 303);
+  assert.match(response.headers.get('set-cookie') ?? '', /^pf_session=; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=0$/);
+  await stream.closed();
+  assert.equal((await browser.request(origin, '/api/overview')).status, 401);
+});
+
+test('выход: POST /logout/all закрывает потоки двух сессий', linux, async (t) => {
+  const { origin, browser } = await fixture(t);
+  const secondBrowser = new Browser();
+  assert.equal((await secondBrowser.login(origin)).status, 303);
+  const first = new SseClient(await openEvents(browser, origin));
+  const second = new SseClient(await openEvents(secondBrowser, origin));
+
+  const response = await browser.request(origin, '/logout/all', { method: 'POST' });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get('location'), '/login');
+  await Promise.all([first.closed(), second.closed()]);
+  assert.equal((await browser.request(origin, '/api/overview')).status, 401);
+  assert.equal((await secondBrowser.request(origin, '/api/overview')).status, 401);
+});
+
+test('поток: закрывается по абсолютному сроку сессии после подставных часов', { ...linux, timeout: 10_000 }, async (t) => {
+  const stand = await startTestHost();
+  const config = configFor(stand.dataDir, stand.project, stand.settings);
+  let now = 1_000;
+  const sessions = createSessions({ secret: 'секрет владельца', ttlMs: 5_000, now: () => now });
+  const origin = await listen(t, createServerApp(config, stand.host, { sessions, now: () => now }));
+  t.after(stand.close);
+  t.after(() => closeAllStreams());
+  const browser = new Browser();
+  assert.equal((await browser.login(origin)).status, 303);
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  const stream = new SseClient(await openEvents(browser, origin));
+
+  now += 5_000;
+  t.mock.timers.tick(5_000);
+  await stream.closed();
+});
+
+test('выход: сбой записи отвечает 503, сохраняет cookie, сессию и поток', linux, async (t) => {
+  const { origin, browser, core, dataDir, project } = await fixture(t);
+  const run = waitingRunFixture(dataDir, project.path, { id: 'own-run', next: 'gate1' });
+  const stream = new SseClient(await openEvents(browser, origin));
+  const file = path.join(dataDir, 'server', 'sessions.json');
+  const saved = fs.readFileSync(file);
+  const cookie = browser.sessionToken;
+  fs.rmSync(file);
+  fs.mkdirSync(path.join(file, 'nonempty'), { recursive: true });
+
+  const another = new Browser();
+  assert.equal((await another.login(origin)).status, 503);
+  assert.equal(another.sessionToken, '');
+  const logout = await browser.request(origin, '/logout', { method: 'POST' });
+  assert.equal(logout.status, 503);
+  assert.equal(logout.headers.get('set-cookie'), null);
+  assert.equal(browser.sessionToken, cookie);
+  const logoutAll = await browser.request(origin, '/logout/all', { method: 'POST' });
+  assert.equal(logoutAll.status, 503);
+  assert.equal(logoutAll.headers.get('set-cookie'), null);
+  core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'после сбоя' });
+  assert.equal((await stream.next()).event, 'agent.output');
+
+  fs.rmSync(file, { recursive: true });
+  fs.writeFileSync(file, saved, { mode: 0o600 });
+  assert.equal((await browser.request(origin, '/logout', { method: 'POST' })).status, 303);
+  await stream.closed();
+});
+
+test('защита: каждый POST без собственного Origin отклоняется до ядра', linux, async (t) => {
+  const { origin, browser, core } = await fixture(t);
+  let calls = 0;
+  core.getRun = async (id) => {
+    calls++;
+    throw new Error(`Неожиданный вызов ${id}`);
+  };
+  const routes = [
+    '/login',
+    '/logout',
+    '/logout/all',
+    '/legacy/settings/telegram/probe',
+    '/legacy/projects/project/chats',
+    '/legacy/chats/chat/messages',
+    '/legacy/projects/project/runs',
+    '/legacy/runs/run/stop',
+    '/legacy/runs/run/decision',
+    '/api/core/getRun',
+  ];
+  const origins = [undefined, 'null', 'https://foreign.example'];
+
+  for (const route of routes) {
+    for (const originHeader of origins) {
+      const response = await fetch(`${origin}${route}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: {
+          Cookie: `pf_session=${browser.sessionToken}`,
+          ...(originHeader === undefined ? {} : { Origin: originHeader }),
+        },
+      });
+      assert.equal(response.status, 403, `${route}, Origin: ${originHeader ?? 'отсутствует'}`);
+      await response.arrayBuffer();
+    }
+  }
+  assert.equal(calls, 0);
+});
+
+test('защита: страница входа и API не кешируются', linux, async (t) => {
+  const { origin, browser } = await fixture(t);
+  assert.equal((await fetch(`${origin}/login`)).headers.get('cache-control'), 'no-store');
+  assert.equal((await browser.request(origin, '/api/overview')).headers.get('cache-control'), 'no-store');
+  assert.equal((await browser.request(origin, '/api/settings')).headers.get('cache-control'), 'no-store');
 });

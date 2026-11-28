@@ -1,23 +1,32 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
+import fs from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { hashSecret, verifySecret } from './secret.js';
+import path from 'node:path';
+import type { ServerConfig } from './config.js';
+import { hashSecret, readLoginSecret, verifySecret } from './secret.js';
 import { WINDOW_ROUTES } from './web-assets.js';
 
 export interface Sessions {
   login(candidate: string): LoginResult;
   validate(token: string): boolean;
+  expiresAt(token: string): number | undefined;
   logout(token: string): void;
+  logoutAll(): void;
   guard(req: IncomingMessage, res: ServerResponse): boolean;
 }
 
 export type LoginResult =
-  { kind: 'token'; token: string; maxAgeSec: number } | { kind: 'invalid' } | { kind: 'rateLimited'; retryAfterSec: number };
+  | { kind: 'token'; token: string; maxAgeSec: number }
+  | { kind: 'invalid' }
+  | { kind: 'rateLimited'; retryAfterSec: number }
+  | { kind: 'unavailable' };
 
 export type BodyResult = { kind: 'ok'; body: string } | { kind: 'bodyTooLarge' } | { kind: 'timeout' } | { kind: 'aborted' };
 
 export interface CreateSessionsOptions {
   secret?: string;
   secretHash?: string;
+  file?: string;
   ttlMs?: number;
   now?: () => number;
 }
@@ -27,17 +36,72 @@ export interface ReadBodyOptions {
   timeoutMs?: number;
 }
 
+function tokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+function writeSessions(file: string, secretTag: string, sessions: Map<string, number>): void {
+  const data = JSON.stringify({
+    secretTag,
+    sessions: [...sessions].map(([hash, expiresAt]) => ({ hash, expiresAt })),
+  });
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmp, data, { mode: 0o600 });
+    fs.chmodSync(tmp, 0o600);
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+function readSessions(file: string | undefined, secretTag: string, now: () => number): Map<string, number> {
+  const sessions = new Map<string, number>();
+  if (!file) return sessions;
+  try {
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      secretTag?: unknown;
+      sessions?: { hash?: unknown; expiresAt?: unknown }[];
+    };
+    if (stored.secretTag !== secretTag || !Array.isArray(stored.sessions)) return sessions;
+    const current = now();
+    for (const entry of stored.sessions) {
+      if (
+        entry &&
+        typeof entry.hash === 'string' &&
+        /^[a-f0-9]{64}$/.test(entry.hash) &&
+        typeof entry.expiresAt === 'number' &&
+        Number.isFinite(entry.expiresAt) &&
+        entry.expiresAt > current
+      ) {
+        sessions.set(entry.hash, entry.expiresAt);
+      }
+    }
+  } catch {
+    return new Map();
+  }
+  return sessions;
+}
+
 export function createSessions(options: CreateSessionsOptions): Sessions {
   const ttlMs = options.ttlMs ?? 12 * 60 * 60 * 1000;
   const now = options.now ?? Date.now;
   const storedSecret = options.secretHash ?? hashSecret(options.secret ?? '');
-  const sessions = new Map<string, number>();
-  const failures: number[] = [];
+  const secretTag = createHash('sha256').update(storedSecret).digest('hex');
+  let sessions = readSessions(options.file, secretTag, now);
+  let failures = 0;
+  let lockedUntil = 0;
+  const commit = (next: Map<string, number>): void => {
+    if (options.file) writeSessions(options.file, secretTag, next);
+    sessions = next;
+  };
   const validate = (token: string): boolean => {
-    const expiresAt = sessions.get(token);
+    const hash = tokenHash(token);
+    const expiresAt = sessions.get(hash);
     if (expiresAt === undefined) return false;
     if (now() >= expiresAt) {
-      sessions.delete(token);
+      sessions.delete(hash);
       return false;
     }
     return true;
@@ -46,24 +110,49 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
   return {
     login(candidate) {
       const current = now();
-      while (failures[0] !== undefined && failures[0] <= current - 60_000) failures.shift();
-      if (failures.length >= 5) {
-        return { kind: 'rateLimited', retryAfterSec: Math.max(1, Math.ceil(((failures[0] ?? current) + 60_000 - current) / 1000)) };
+      if (current < lockedUntil) {
+        return { kind: 'rateLimited', retryAfterSec: Math.max(1, Math.ceil((lockedUntil - current) / 1000)) };
       }
-
+      if (lockedUntil !== 0) {
+        failures = 0;
+        lockedUntil = 0;
+      }
       if (!verifySecret(candidate, storedSecret)) {
-        failures.push(current);
+        failures++;
+        if (failures >= 10) {
+          lockedUntil = current + 15 * 60 * 1000;
+          return { kind: 'rateLimited', retryAfterSec: 15 * 60 };
+        }
         return { kind: 'invalid' };
       }
+      failures = 0;
 
       let token = randomBytes(32).toString('base64url');
-      while (sessions.has(token)) token = randomBytes(32).toString('base64url');
-      sessions.set(token, current + ttlMs);
+      let hash = tokenHash(token);
+      while (sessions.has(hash)) {
+        token = randomBytes(32).toString('base64url');
+        hash = tokenHash(token);
+      }
+      const next = new Map(sessions);
+      next.set(hash, current + ttlMs);
+      try {
+        commit(next);
+      } catch {
+        return { kind: 'unavailable' };
+      }
       return { kind: 'token', token, maxAgeSec: Math.max(1, Math.ceil(ttlMs / 1000)) };
     },
     validate,
+    expiresAt(token) {
+      return validate(token) ? sessions.get(tokenHash(token)) : undefined;
+    },
     logout(token) {
-      sessions.delete(token);
+      const next = new Map(sessions);
+      next.delete(tokenHash(token));
+      commit(next);
+    },
+    logoutAll() {
+      commit(new Map());
     },
     guard(req, res) {
       const token = sessionToken(req);
@@ -79,6 +168,14 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
       return false;
     },
   };
+}
+
+export function sessionsFor(config: ServerConfig, now?: () => number): Sessions {
+  return createSessions({
+    secretHash: readLoginSecret(config.secretFile),
+    file: path.join(config.dataDir, 'server', 'sessions.json'),
+    now,
+  });
 }
 
 function sessionToken(req: IncomingMessage): string | undefined {
