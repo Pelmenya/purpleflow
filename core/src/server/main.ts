@@ -5,6 +5,7 @@ import { gateMessage } from '../gates.js';
 import { ShuttingDownError } from '../kernel.js';
 import type { ChangeDocs, ChatFile, ChatSummary, DiffFile, RunFile } from '../types.js';
 import { renderAcceptance } from './accept-page.js';
+import { createBridgeHandler } from './bridge-http.js';
 import { buildAgentEnv, loadServerConfig, readSecret } from './config.js';
 import type { ServerConfig } from './config.js';
 import { startHost as startServerHost } from './host.js';
@@ -251,10 +252,13 @@ const projectChatsRoute = /^\/projects\/([A-Za-z0-9_-]+)\/chats$/;
 const chatRoute = /^\/chats\/([A-Za-z0-9_-]+)$/;
 const chatApiRoute = /^\/api\/chats\/([A-Za-z0-9_-]+)$/;
 const chatMessagesRoute = /^\/chats\/([A-Za-z0-9_-]+)\/messages$/;
+const coreRoute = /^\/api\/core\/[^/]+$/;
 const readMethods = ['GET'] as const;
 const routeMethods: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
   ['/', readMethods],
   ['/api/overview', readMethods],
+  ['/api/settings', readMethods],
+  ['/api/events', readMethods],
   ['/login', ['GET', 'POST']],
   ['/logout', ['POST']],
   ['/settings', readMethods],
@@ -269,6 +273,7 @@ function allowedMethods(route: string): readonly string[] | undefined {
   if (runRoute.test(route) || runLogRoute.test(route) || projectRoute.test(route) || chatRoute.test(route) || chatApiRoute.test(route))
     return readMethods;
   if (projectChatsRoute.test(route)) return ['GET', 'POST'];
+  if (coreRoute.test(route)) return ['POST'];
   if (runStopRoute.test(route) || runDecisionRoute.test(route) || projectRunsRoute.test(route) || chatMessagesRoute.test(route))
     return ['POST'];
   return routeMethods.get(route);
@@ -290,6 +295,7 @@ export function createServerApp(
   } = {},
 ): RequestListener {
   const sessions = opts.sessions ?? createSessions({ secret: readSecret(config.secretFile), now: opts.now });
+  const bridge = createBridgeHandler(config, host);
   return async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -308,6 +314,7 @@ export function createServerApp(
     if (!publicLogin && !sessions.guard(req, res)) return;
 
     try {
+      if (await bridge(req, res)) return;
       if (route === '/login' && method === 'GET') {
         html(res, 200, loginPage(isReturnRoute(url.searchParams.get('returnTo') ?? '/')));
         return;

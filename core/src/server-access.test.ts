@@ -82,8 +82,14 @@ test('допуск: списки оставляют только допущен�
     { path: foreign, configured: true, exists: true, runs: 1, active: 0, lastRunAt: null },
   ];
 
-  assert.deepEqual((filterResult(context, 'listRuns', context.store.list()) as { id: string }[]).map(({ id }) => id), [ownRun.id]);
-  assert.deepEqual((filterResult(context, 'listChats', chats) as ChatSummary[]).map(({ id }) => id), ['own', 'free']);
+  assert.deepEqual(
+    (filterResult(context, 'listRuns', context.store.list()) as { id: string }[]).map(({ id }) => id),
+    [ownRun.id],
+  );
+  assert.deepEqual(
+    (filterResult(context, 'listChats', chats) as ChatSummary[]).map(({ id }) => id),
+    ['own', 'free'],
+  );
   assert.deepEqual(filterResult(context, 'listProjects', projects), [projects[0]]);
 });
 

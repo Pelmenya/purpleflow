@@ -360,7 +360,7 @@ export async function startHost(opts: StartHostOptions): Promise<Host> {
           } catch (error) {
             if (error instanceof ShuttingDownError || error instanceof AccessError) throw error;
             const message = error instanceof Error ? error.message : String(error);
-            throw new Error(redactSecrets(message, secrets));
+            throw new Error(redactSecrets(message, secrets), { cause: error });
           } finally {
             operationFinished();
           }

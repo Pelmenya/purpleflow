@@ -74,6 +74,10 @@ export async function listen(t: TestContext, handler: http.RequestListener): Pro
 export class Browser {
   private cookie = '';
 
+  get sessionToken(): string {
+    return this.cookie.replace(/^pf_session=/, '');
+  }
+
   async request(origin: string, route: string, init: RequestInit = {}): Promise<Response> {
     const headers = new Headers(init.headers);
     if (this.cookie) headers.set('Cookie', this.cookie);
@@ -299,6 +303,7 @@ export async function startTestHost(
     runners?: CoreOptions['runners'];
     settings?: CoreSettings;
     project?: Partial<ServerProject>;
+    agentEnv?: NodeJS.ProcessEnv;
     onCore?: (core: Orchestrator) => void;
   } = {},
 ): Promise<{
@@ -336,7 +341,7 @@ export async function startTestHost(
     promptsDir: PROMPTS,
     projects: [project],
     settings,
-    agentEnv: env,
+    agentEnv: opts.agentEnv ?? env,
     runners: opts.runners,
     onCore: (value) => {
       core = value;
