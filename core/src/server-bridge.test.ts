@@ -308,6 +308,22 @@ test('поток: потоки закрываются по токену сесс
   await Promise.all([firstAgain.closed(), second.closed()]);
 });
 
+test('поток: событие сразу после закрытия не пишет в завершённый ответ', linux, async (t) => {
+  const { origin, browser, core, dataDir, project } = await fixture(t);
+  const run = waitingRunFixture(dataDir, project.path, { id: 'own-run', next: 'gate1' });
+  const output = (text: string): CoreEvent => ({ type: 'agent.output', runId: run.id, stage: 'implement', text });
+  const first = new SseClient(await openEvents(browser, origin));
+
+  closeSessionStreams(browser.sessionToken);
+  core.kernel.emit(output('после закрытия сессии'));
+  await first.closed();
+
+  const second = new SseClient(await openEvents(browser, origin));
+  closeAllStreams();
+  core.kernel.emit(output('после общего закрытия'));
+  await second.closed();
+});
+
 test('мост: close ждёт принятый вызов и отклоняет новые', linux, async (t) => {
   const { origin, browser, core, host, project } = await fixture(t);
   const chat = await core.createChat({ projectPath: project.path });

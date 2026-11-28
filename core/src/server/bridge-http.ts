@@ -97,7 +97,7 @@ export function createBridgeHandler(config: ServerConfig, host: Host): (req: Inc
         bufferBytes -= buffer.shift()!.bytes;
       }
     }
-    for (const stream of streams) if (!stream.res.destroyed) stream.res.write(text);
+    for (const stream of streams) if (!stream.res.destroyed && !stream.res.writableEnded) stream.res.write(text);
   });
 
   const openEvents = (req: IncomingMessage, res: ServerResponse): void => {
