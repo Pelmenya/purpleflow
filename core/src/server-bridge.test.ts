@@ -386,6 +386,22 @@ test('выход: POST /logout/all закрывает потоки двух се
   assert.equal((await secondBrowser.request(origin, '/api/overview')).status, 401);
 });
 
+test('выход: POST /logout/all не закрывает потоки другого приложения', linux, async (t) => {
+  const first = await fixture(t);
+  const second = await fixture(t);
+  const firstStream = new SseClient(await openEvents(first.browser, first.origin));
+  const secondStream = new SseClient(await openEvents(second.browser, second.origin));
+  const run = waitingRunFixture(second.dataDir, second.project.path, { id: 'other-app-run', next: 'gate1' });
+
+  const response = await first.browser.request(first.origin, '/logout/all', { method: 'POST' });
+  assert.equal(response.status, 303);
+  await firstStream.closed();
+  second.core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'другого приложения' });
+  assert.equal((await secondStream.next()).event, 'agent.output');
+  assert.equal((await second.browser.request(second.origin, '/api/overview')).status, 200);
+  await secondStream.close();
+});
+
 test('поток: закрывается по абсолютному сроку сессии после подставных часов', { ...linux, timeout: 10_000 }, async (t) => {
   const stand = await startTestHost();
   const config = configFor(stand.dataDir, stand.project, stand.settings);
@@ -445,6 +461,43 @@ test('поток: истечение между guard и expiresAt не проп
   const run = waitingRunFixture(dataDir, project.path, { id: 'expired-run', next: 'gate1' });
   core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'после истечения' });
   await assert.rejects(stream.next(), /Поток SSE закрылся до события/);
+});
+
+async function expirationReplayRace(t: TestContext): Promise<Response> {
+  const stand = await startTestHost();
+  const config = configFor(stand.dataDir, stand.project, stand.settings);
+  let now = 0;
+  let armed = false;
+  let calls = 0;
+  const clock = () => {
+    if (armed && ++calls === 2) now = 1_000;
+    return now;
+  };
+  const sessions = createSessions({ secret: 'секрет владельца', ttlMs: 1_000, now: clock });
+  const origin = await listen(t, createServerApp(config, stand.host, { sessions, now: clock }));
+  t.after(stand.close);
+  t.after(() => closeAllStreams());
+  const browser = new Browser();
+  assert.equal((await browser.login(origin)).status, 303);
+  const initial = new SseClient(await openEvents(browser, origin));
+  const run = waitingRunFixture(stand.dataDir, stand.project.path, { id: 'replayed-run', next: 'gate1' });
+  stand.core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'первое событие' });
+  const event = await initial.next();
+  await initial.close();
+  stand.core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'секретное событие' });
+  now = 999;
+  armed = true;
+  return openEvents(browser, origin, event.id);
+}
+
+test('поток: истечение между guard и expiresAt не отдаёт replay', { ...linux, timeout: 10_000 }, async (t) => {
+  const stream = new SseClient(await expirationReplayRace(t));
+  await assert.rejects(stream.next(), /Поток SSE закрылся до события/);
+});
+
+test('поток: истечение с Last-Event-ID не отдаёт буферизованные события', { ...linux, timeout: 10_000 }, async (t) => {
+  const response = await expirationReplayRace(t);
+  assert.doesNotMatch(await response.text(), /секретное событие/);
 });
 
 test('выход: сбой записи отвечает 503, сохраняет cookie, сессию и поток', linux, async (t) => {
