@@ -170,6 +170,7 @@ test('сессия: сбой записи не меняет память и не
   fs.rmSync(file);
   fs.mkdirSync(path.join(file, 'nonempty'), { recursive: true });
 
+  for (let attempt = 0; attempt < 9; attempt++) assert.equal(sessions.login('неверно').kind, 'invalid');
   assert.deepEqual(sessions.login(SECRET), { kind: 'unavailable' });
   assert.throws(() => sessions.logout(first));
   assert.throws(() => sessions.logoutAll());
@@ -177,6 +178,7 @@ test('сессия: сбой записи не меняет память и не
 
   fs.rmSync(file, { recursive: true });
   fs.writeFileSync(file, saved, { mode: 0o600 });
+  assert.deepEqual(sessions.login('неверно'), { kind: 'rateLimited', retryAfterSec: 900 });
   const restarted = createSessions({ secretHash: SECRET_HASH, file });
   assert.equal(restarted.validate(first), true);
 });

@@ -125,8 +125,6 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
         }
         return { kind: 'invalid' };
       }
-      failures = 0;
-
       let token = randomBytes(32).toString('base64url');
       let hash = tokenHash(token);
       while (sessions.has(hash)) {
@@ -140,6 +138,7 @@ export function createSessions(options: CreateSessionsOptions): Sessions {
       } catch {
         return { kind: 'unavailable' };
       }
+      failures = 0;
       return { kind: 'token', token, maxAgeSec: Math.max(1, Math.ceil(ttlMs / 1000)) };
     },
     validate,

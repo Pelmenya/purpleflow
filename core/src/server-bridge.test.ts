@@ -404,6 +404,49 @@ test('поток: закрывается по абсолютному сроку 
   await stream.closed();
 });
 
+async function expirationRace(t: TestContext) {
+  const stand = await startTestHost();
+  const config = configFor(stand.dataDir, stand.project, stand.settings);
+  let now = 0;
+  let armed = false;
+  let calls = 0;
+  const clock = () => {
+    if (armed && ++calls === 2) now = 1_000;
+    return now;
+  };
+  const sessions = createSessions({ secret: 'секрет владельца', ttlMs: 1_000, now: clock });
+  const origin = await listen(t, createServerApp(config, stand.host, { sessions, now: clock }));
+  t.after(stand.close);
+  t.after(() => closeAllStreams());
+  const browser = new Browser();
+  assert.equal((await browser.login(origin)).status, 303);
+  now = 999;
+  armed = true;
+  return { ...stand, stream: new SseClient(await openEvents(browser, origin)) };
+}
+
+test('поток: истечение между guard и expiresAt закрывает ответ', { ...linux, timeout: 10_000 }, async (t) => {
+  const { stream } = await expirationRace(t);
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      stream.closed(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('Поток SSE не закрылся')), 1_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+test('поток: истечение между guard и expiresAt не пропускает события', { ...linux, timeout: 10_000 }, async (t) => {
+  const { stream, core, dataDir, project } = await expirationRace(t);
+  const run = waitingRunFixture(dataDir, project.path, { id: 'expired-run', next: 'gate1' });
+  core.kernel.emit({ type: 'agent.output', runId: run.id, stage: 'implement', text: 'после истечения' });
+  await assert.rejects(stream.next(), /Поток SSE закрылся до события/);
+});
+
 test('выход: сбой записи отвечает 503, сохраняет cookie, сессию и поток', linux, async (t) => {
   const { origin, browser, core, dataDir, project } = await fixture(t);
   const run = waitingRunFixture(dataDir, project.path, { id: 'own-run', next: 'gate1' });

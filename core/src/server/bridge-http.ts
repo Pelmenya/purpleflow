@@ -143,6 +143,10 @@ export function createBridgeHandler(
     };
     stream.ping.unref();
     const expiresAt = opts.expiresAt?.(token);
+    if (opts.expiresAt && expiresAt === undefined) {
+      closeStream(stream);
+      return;
+    }
     if (expiresAt !== undefined) {
       const delay = Math.max(0, expiresAt - (opts.now?.() ?? Date.now()));
       stream.expiration = setTimeout(() => closeStream(stream), delay);
