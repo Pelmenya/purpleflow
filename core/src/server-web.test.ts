@@ -5,15 +5,7 @@ import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createServerApp } from './server/main.js';
 import { LOGIN_CSP, WINDOW_CSP } from './server/web-assets.js';
-import {
-  Browser,
-  configFor,
-  listen,
-  PUBLIC_ORIGIN,
-  serverTestsSkip,
-  startTestHost,
-  waitingRunFixture,
-} from './server-testkit.test.js';
+import { Browser, configFor, listen, PUBLIC_ORIGIN, serverTestsSkip, startTestHost, waitingRunFixture } from './server-testkit.test.js';
 
 async function webFixture(t: TestContext, built = true) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pf-server-web-')));
@@ -146,9 +138,7 @@ test('веб: формы приёмки старой страницы ведут
   const response = await browser.request(fixture.origin, `/legacy/runs/${run.id}`);
   assert.equal(response.status, 200);
   const page = await response.text();
-  const actions = [...page.matchAll(/<form[^>]+action="([^"]+)"/g)]
-    .map((match) => match[1])
-    .filter((action) => action !== '/logout');
+  const actions = [...page.matchAll(/<form[^>]+action="([^"]+)"/g)].map((match) => match[1]).filter((action) => action !== '/logout');
   assert.ok(actions.length >= 2);
   for (const action of actions) assert.match(action ?? '', new RegExp(`^/legacy/runs/${run.id}/`));
 });

@@ -65,7 +65,8 @@ function settingsPage(telegram?: TelegramHandle, notice = ''): string {
 function overviewPage(snapshot: HostSnapshot): string {
   const projects = snapshot.projects
     .map(
-      (project) => `<li data-project-id="${escapeHtml(project.id)}"><a href="/legacy/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
+      (project) =>
+        `<li data-project-id="${escapeHtml(project.id)}"><a href="/legacy/projects/${project.id}">${escapeHtml(project.name)}</a></li>`,
     )
     .join('');
   const runs = snapshot.runs
@@ -76,7 +77,10 @@ function overviewPage(snapshot: HostSnapshot): string {
     .join('');
   const waiting = snapshot.runs
     .filter((run) => run.status === 'waiting' && run.gate)
-    .map((run) => `<li><a href="/legacy/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a>: ${escapeHtml(run.reason ?? '')}</li>`)
+    .map(
+      (run) =>
+        `<li><a href="/legacy/runs/${encodeURIComponent(run.id)}">${escapeHtml(run.title)}</a>: ${escapeHtml(run.reason ?? '')}</li>`,
+    )
     .join('');
   return `<h1>Проекты и прогоны</h1>${logoutForm()}<h2>Проекты</h2><ul>${projects}</ul><h2>Ожидают решения</h2><ul>${waiting}</ul><h2>Прогоны</h2><table><thead><tr><th>Прогон</th><th>Проект</th><th>Статус</th><th>Стадия</th></tr></thead><tbody>${runs}</tbody></table>`;
 }

@@ -93,9 +93,7 @@ export function createWebAssets(webDir = DEFAULT_WEB_DIR) {
       const result = serve(asset ? route : '/index.html', res, asset);
       if (result.kind === 'ok') return true;
       if (!asset && result.kind === 'missing') {
-        res
-          .writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' })
-          .end('Окно не собрано: выполните npm run build:web');
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' }).end('Окно не собрано: выполните npm run build:web');
       } else notFound(res);
       return true;
     },

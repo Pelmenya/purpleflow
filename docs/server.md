@@ -19,6 +19,7 @@
 ```bash
 npm ci
 npm run build:core
+npm run build:web
 ```
 
 Создайте отдельные каталоги и секрет входа:
