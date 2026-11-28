@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { createServerApp } from './server/main.js';
-import { LOGIN_CSP, WINDOW_CSP } from './server/web-assets.js';
+import { DEFAULT_WEB_DIR, LOGIN_CSP, WINDOW_CSP } from './server/web-assets.js';
 import { Browser, configFor, listen, PUBLIC_ORIGIN, serverTestsSkip, startTestHost, waitingRunFixture } from './server-testkit.test.js';
 
 async function webFixture(t: TestContext, built = true) {
@@ -36,6 +36,22 @@ function assertWindowHtml(response: Response, body: string): void {
   assert.match(WINDOW_CSP, /form-action 'none'/);
   assert.equal(response.headers.get('x-content-type-options'), 'nosniff');
 }
+
+const realCodicon = fs.existsSync(path.join(DEFAULT_WEB_DIR, 'assets'))
+  ? fs.readdirSync(path.join(DEFAULT_WEB_DIR, 'assets')).find((file) => /^codicon-.*\.ttf$/.test(file))
+  : undefined;
+
+test('веб: реальная сборка отдаёт шрифт Codicon с типом font/ttf', { skip: serverTestsSkip || !realCodicon }, async (t) => {
+  assert.ok(realCodicon);
+  const { origin, webDir } = await webFixture(t);
+  fs.copyFileSync(path.join(DEFAULT_WEB_DIR, 'assets', realCodicon), path.join(webDir, 'assets', realCodicon));
+  const browser = new Browser();
+
+  const response = await browser.request(origin, `/assets/${realCodicon}`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'font/ttf');
+  assert.equal(response.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+});
 
 test('веб: вход и ресурсы публичны, маршруты окна после входа отдают index.html', { skip: serverTestsSkip }, async (t) => {
   const { origin } = await webFixture(t);

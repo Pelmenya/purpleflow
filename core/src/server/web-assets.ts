@@ -20,6 +20,7 @@ const CONTENT_TYPES: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.wasm': 'application/wasm',
