@@ -1,11 +1,18 @@
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { test, type TestContext } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { claudeEnv } from './agents/claude.js';
 import { buildAgentEnv, loadServerConfig } from './server/config.js';
+import type { ServerConfig } from './server/config.js';
+import { startHost } from './server/host.js';
+import { createServerApp } from './server/main.js';
+import { Browser, listen, makeServerStand, serverTestsSkip } from './server-testkit.test.js';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const CHECKOUT = ROOT.replace(/[\\/]$/, '');
@@ -49,13 +56,11 @@ function substituted(file: string, replacements: Record<string, string>): string
 }
 
 function validateUnit(text: string): void {
-  const values = new Map(
-    text
-      .split('\n')
-      .map((line) => line.match(/^([A-Za-z]+)=(.*)$/) as [string, string] | null)
-      .filter((match): match is RegExpMatchArray => match !== null)
-      .map((match) => [match[1], match[2]]),
-  );
+  const values = new Map<string, string>();
+  for (const line of text.split('\n')) {
+    const match = /^([A-Za-z]+)=(.*)$/.exec(line);
+    if (match) values.set(match[1]!, match[2]!);
+  }
   const command = values.get('ExecStart')?.split(' ') ?? [];
   assert.equal(command.length, 4);
   const [node, main, configFlag, config] = command;
@@ -185,12 +190,189 @@ test('каталог данных настольного приложения о
   assert.doesNotThrow(() => loadServerConfig(writeConfig(dir, installConfig(dir, path.join(dir, 'separate-data')))));
 });
 
-test('вход через провайдера: переменная из ~/.bash_profile доходит до claude', { skip: process.platform !== 'linux' || !fs.existsSync('/bin/bash') }, (t) => {
-  const home = tempDir(t);
-  fs.writeFileSync(path.join(home, '.bash_profile'), 'export ANTHROPIC_BASE_URL=https://provider.example/\n', { mode: 0o600 });
+test(
+  'вход через провайдера: переменная из ~/.bash_profile доходит до claude',
+  { skip: process.platform !== 'linux' || !fs.existsSync('/bin/bash') },
+  (t) => {
+    const home = tempDir(t);
+    fs.writeFileSync(path.join(home, '.bash_profile'), 'export ANTHROPIC_BASE_URL=https://provider.example/\n', { mode: 0o600 });
 
-  const env = buildAgentEnv({ HOME: home, USER: 'service', LOGNAME: 'service', SHELL: '/bin/bash' });
-  assert.equal(env.ANTHROPIC_BASE_URL, 'https://provider.example/');
-  assert.equal(claudeEnv({ env, claudeAuth: 'env' }).ANTHROPIC_BASE_URL, 'https://provider.example/');
-  assert.equal(claudeEnv({ env, claudeAuth: 'login' }).ANTHROPIC_BASE_URL, undefined);
+    const env = buildAgentEnv({ HOME: home, USER: 'service', LOGNAME: 'service', SHELL: '/bin/bash' });
+    assert.equal(env.ANTHROPIC_BASE_URL, 'https://provider.example/');
+    assert.equal(claudeEnv({ env, claudeAuth: 'env' }).ANTHROPIC_BASE_URL, 'https://provider.example/');
+    assert.equal(claudeEnv({ env, claudeAuth: 'login' }).ANTHROPIC_BASE_URL, undefined);
+  },
+);
+
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const { port } = address;
+  await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  return port;
+}
+
+async function startBuiltService(t: TestContext, configFile: string, port: number): Promise<string> {
+  const proc: ChildProcess = spawn(process.execPath, [path.join(CHECKOUT, 'core', 'dist', 'server', 'main.js'), '--config', configFile], {
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  assert.ok(proc.pid);
+  let stderr = '';
+  proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+  const exited = once(proc, 'exit');
+  let stopping: Promise<void> | undefined;
+  t.after(() => {
+    stopping ??= (async () => {
+      if (proc.exitCode === null && proc.signalCode === null) process.kill(-proc.pid!, 'SIGTERM');
+      const killTimer = setTimeout(() => {
+        if (proc.exitCode === null && proc.signalCode === null) process.kill(-proc.pid!, 'SIGKILL');
+      }, 10_000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(killTimer);
+      }
+    })();
+    return stopping;
+  });
+
+  const origin = `http://127.0.0.1:${port}`;
+  const earlyExit = exited.then(([code, signal]) => {
+    throw new Error(`Служба завершилась до готовности: код ${code ?? '—'}, сигнал ${signal ?? '—'}\n${stderr}`);
+  });
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Служба не открыла /login за 20 с\n${stderr}`)), 20_000);
+  });
+  let polling = true;
+  const readiness = (async () => {
+    while (polling) {
+      try {
+        const response = await fetch(`${origin}/login`, { signal: AbortSignal.timeout(1000) });
+        if (response.status === 200) return;
+      } catch {
+        // Служба ещё не слушает порт или восстанавливает прогоны.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  })();
+  try {
+    await Promise.race([readiness, earlyExit, deadline]);
+  } finally {
+    polling = false;
+    if (timer) clearTimeout(timer);
+  }
+  return origin;
+}
+
+async function startRun(browser: Browser, origin: string): Promise<string> {
+  const project = await browser.request(origin, '/projects/p1');
+  assert.equal(project.status, 200);
+  const submissionId = /name="submissionId" value="([0-9a-f-]+)"/.exec(await project.text())?.[1];
+  assert.ok(submissionId);
+  const started = await browser.request(origin, '/projects/p1/runs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ submissionId, task: 'Добавь mul' }),
+  });
+  assert.equal(started.status, 303);
+  const route = started.headers.get('location');
+  assert.ok(route && route.startsWith('/runs/'));
+  return route;
+}
+
+async function waitForPlan(browser: Browser, origin: string, route: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const response = await browser.request(origin, route);
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    if (text.includes('data-status="waiting"') && text.includes('<dt>Стадия</dt><dd>gate1</dd>')) return;
+    if (text.includes('data-status="stopped"')) throw new Error(`Прогон остановился до gate1: ${text}`);
+    if (Date.now() > deadline) throw new Error(`Прогон не дошёл до gate1: ${text}`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+test('собранная служба: глубокая ссылка через вход и выход', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const stand = makeServerStand();
+  t.after(() => fs.rmSync(path.dirname(stand.dataDir), { recursive: true, force: true }));
+  const port = await freePort();
+  const config = JSON.parse(fs.readFileSync(stand.configFile, 'utf8')) as ServerConfig;
+  config.port = port;
+  fs.writeFileSync(stand.configFile, JSON.stringify(config), { mode: 0o600 });
+  const origin = await startBuiltService(t, stand.configFile, port);
+
+  const owner = new Browser();
+  assert.equal((await owner.login(origin)).status, 303);
+  const runRoute = await startRun(owner, origin);
+  await waitForPlan(owner, origin, runRoute);
+  assert.ok(fs.readFileSync(stand.fakeLog, 'utf8').trim());
+
+  const anonymous = new Browser();
+  const protectedPage = await anonymous.request(origin, runRoute);
+  assert.equal(protectedPage.status, 303);
+  const loginLocation = new URL(protectedPage.headers.get('location') ?? '', origin);
+  assert.equal(loginLocation.pathname, '/login');
+  const returnTo = loginLocation.searchParams.get('returnTo');
+  assert.equal(returnTo, runRoute);
+  const entered = await anonymous.login(origin, returnTo!);
+  assert.equal(entered.status, 303);
+  assert.equal(entered.headers.get('location'), runRoute);
+  assert.equal((await anonymous.request(origin, runRoute)).status, 200);
+
+  const loggedOut = await anonymous.request(origin, '/logout', { method: 'POST' });
+  assert.equal(loggedOut.status, 303);
+  assert.equal(loggedOut.headers.get('location'), '/');
+  const afterLogout = await anonymous.request(origin, runRoute);
+  assert.equal(afterLogout.status, 303);
+  const afterLogoutLocation = new URL(afterLogout.headers.get('location') ?? '', origin);
+  assert.equal(afterLogoutLocation.searchParams.get('returnTo'), runRoute);
+  const reentered = await anonymous.login(origin, runRoute);
+  assert.equal(reentered.status, 303);
+  assert.equal(reentered.headers.get('location'), runRoute);
+  assert.equal((await anonymous.request(origin, runRoute)).status, 200);
+});
+
+test('истёкший вход возвращает к тому же прогону', { skip: serverTestsSkip, timeout: 60_000 }, async (t) => {
+  const stand = makeServerStand();
+  t.after(() => fs.rmSync(path.dirname(stand.dataDir), { recursive: true, force: true }));
+  const config = loadServerConfig(stand.configFile);
+  let currentTime = Date.now();
+  const host = await startHost({
+    dataDir: config.dataDir,
+    promptsDir: config.promptsDir,
+    projects: config.projects,
+    settings: config.settings,
+    agentEnv: { HOME: process.env.HOME, PATH: process.env.PATH },
+  });
+  t.after(() => host.close());
+  const origin = await listen(t, createServerApp(config, host, { now: () => currentTime }));
+
+  const browser = new Browser();
+  const login = await browser.login(origin);
+  assert.equal(login.status, 303);
+  const sessionCookie = /pf_session=[^;]+/.exec(login.headers.get('set-cookie') ?? '')?.[0];
+  assert.ok(sessionCookie);
+  const runRoute = await startRun(browser, origin);
+  await waitForPlan(browser, origin, runRoute);
+
+  const beforeExpiry = await fetch(`${origin}${runRoute}`, { redirect: 'manual', headers: { Cookie: sessionCookie } });
+  assert.equal(beforeExpiry.status, 200);
+  currentTime += 12 * 60 * 60 * 1000 + 1000;
+  const expired = await fetch(`${origin}${runRoute}`, { redirect: 'manual', headers: { Cookie: sessionCookie } });
+  assert.equal(expired.status, 303);
+  const loginLocation = new URL(expired.headers.get('location') ?? '', origin);
+  assert.equal(loginLocation.pathname, '/login');
+  assert.equal(loginLocation.searchParams.get('returnTo'), runRoute);
+
+  const fresh = new Browser();
+  const entered = await fresh.login(origin, runRoute);
+  assert.equal(entered.status, 303);
+  assert.equal(entered.headers.get('location'), runRoute);
+  assert.equal((await fresh.request(origin, runRoute)).status, 200);
 });
