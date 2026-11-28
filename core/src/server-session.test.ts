@@ -111,18 +111,22 @@ test('сессия: другой секрет отзывает старый то
   assert.equal(fs.statSync(file).mtimeMs, mtime);
 });
 
-test('сессия: файл сохраняет права 0600 при повторной записи с umask 022', (t) => {
-  const file = path.join(tempDir(t), 'sessions.json');
-  const previous = process.umask(0o022);
-  t.after(() => process.umask(previous));
-  const sessions = createSessions({ secretHash: SECRET_HASH, file });
-  const first = tokenOf(sessions.login(SECRET));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  tokenOf(sessions.login(SECRET));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-  sessions.logout(first);
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
-});
+test(
+  'сессия: файл сохраняет права 0600 при повторной записи с umask 022',
+  { skip: process.platform !== 'linux' },
+  (t) => {
+    const file = path.join(tempDir(t), 'sessions.json');
+    const previous = process.umask(0o022);
+    t.after(() => process.umask(previous));
+    const sessions = createSessions({ secretHash: SECRET_HASH, file });
+    const first = tokenOf(sessions.login(SECRET));
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    tokenOf(sessions.login(SECRET));
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    sessions.logout(first);
+    assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  },
+);
 
 test('сессия: sessionsFor создаёт каталог server только при первом входе', (t) => {
   const dataDir = tempDir(t);
@@ -135,7 +139,7 @@ test('сессия: sessionsFor создаёт каталог server тольк�
   assert.equal(fs.existsSync(file), false);
 
   const token = tokenOf(sessions.login('секрет владельца'));
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform === 'linux') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   const restarted = sessionsFor(config);
   assert.equal(restarted.validate(token), true);
 });

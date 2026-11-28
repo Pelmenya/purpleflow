@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import type { ServerConfig } from '../../core/src/server/config.js';
+import { hashSecret } from '../../core/src/server/secret.js';
 import type { CoreSettings } from '../../core/src/types.js';
 import type { Sandbox } from './harness';
 
@@ -48,7 +49,7 @@ export async function startWebService(box: Sandbox): Promise<WebService> {
   const origin = `http://127.0.0.1:${port}`;
   const secret = 'секрет веб-пробы';
   const secretFile = path.join(box.root, 'web-secret');
-  fs.writeFileSync(secretFile, secret, { mode: 0o600 });
+  fs.writeFileSync(secretFile, hashSecret(secret), { mode: 0o600 });
   const saved = JSON.parse(fs.readFileSync(path.join(box.profile, 'settings.json'), 'utf8')) as CoreSettings;
   const config: ServerConfig = {
     dataDir: path.join(box.profile, 'data'),
