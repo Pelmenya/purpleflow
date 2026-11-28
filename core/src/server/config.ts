@@ -155,8 +155,10 @@ function mergeSettings(file: string, value: unknown, settings: CoreSettings): vo
   if (raw.agents !== undefined) settings.agents = { ...settings.agents, ...agentRecord(file, raw.agents) };
   if (raw.enabledAgents !== undefined) settings.enabledAgents = enabledAgents(file, raw.enabledAgents);
   if (raw.claudeAuth !== undefined) {
-    if (raw.claudeAuth !== 'login') invalid(file, 'settings.claudeAuth', 'на сервере поддерживается только login');
-    settings.claudeAuth = 'login';
+    if (raw.claudeAuth !== 'login' && raw.claudeAuth !== 'env') {
+      invalid(file, 'settings.claudeAuth', "ожидалось 'login' или 'env'");
+    }
+    settings.claudeAuth = raw.claudeAuth;
   }
   if (raw.userConfig !== undefined) settings.userConfig = booleanAt(file, raw.userConfig, 'settings.userConfig');
   if (raw.maxParallel !== undefined) settings.maxParallel = integerAt(file, raw.maxParallel, 'settings.maxParallel', 1, 8);
@@ -235,6 +237,59 @@ function telegramAt(file: string, value: unknown): TelegramConfig {
   };
 }
 
+export function canonicalPath(p: string): string {
+  const source = p.startsWith('/') ? p : `${process.cwd()}/${p}`;
+  const segments = source.split('/');
+  const pending: string[] = [];
+  let current = '/';
+  let links = 0;
+
+  while (segments.length) {
+    const segment = segments.shift()!;
+    if (!segment || segment === '.') continue;
+    if (segment === '..') {
+      if (pending.length) pending.pop();
+      else current = path.dirname(current);
+      continue;
+    }
+    if (pending.length) {
+      pending.push(segment);
+      continue;
+    }
+
+    const candidate = path.join(current, segment);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(candidate);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+      pending.push(segment);
+      continue;
+    }
+    if (!stat.isSymbolicLink()) {
+      current = candidate;
+      continue;
+    }
+
+    links++;
+    if (links > 40) throw new Error(`слишком много символических ссылок в пути ${p}`);
+    const target = fs.readlinkSync(candidate);
+    if (target.startsWith('/')) current = '/';
+    segments.unshift(...target.split('/'));
+  }
+
+  return pending.length ? path.join(current, ...pending) : current;
+}
+
+export function desktopDataDirs(env: NodeJS.ProcessEnv): string[] {
+  const result: string[] = [];
+  if (env.PURPLEFLOW_USER_DATA) result.push(`${path.resolve(env.PURPLEFLOW_USER_DATA)}/data`);
+  const configHome = env.XDG_CONFIG_HOME || (env.HOME ? `${env.HOME}/.config` : undefined);
+  if (configHome) result.push(`${configHome}/PurpleFlow/data`, `${configHome}/PS Flow/data`);
+  return result;
+}
+
 export function loadServerConfig(file: string): ServerConfig {
   const text = fs.readFileSync(file, 'utf8');
   let parsed: unknown;
@@ -247,8 +302,15 @@ export function loadServerConfig(file: string): ServerConfig {
   rejectUnknownKeys(file, raw, ROOT_KEYS);
   const settings = structuredClone(SERVER_DEFAULTS);
   if (raw.settings !== undefined) mergeSettings(file, raw.settings, settings);
+  const dataDir = absolutePath(file, raw.dataDir, 'dataDir');
+  if (process.platform === 'linux') {
+    const canonicalDataDir = canonicalPath(dataDir);
+    if (desktopDataDirs(process.env).some((candidate) => canonicalPath(candidate) === canonicalDataDir)) {
+      invalid(file, 'dataDir', 'совпадает с каталогом данных настольного приложения');
+    }
+  }
   return {
-    dataDir: absolutePath(file, raw.dataDir, 'dataDir'),
+    dataDir,
     promptsDir:
       raw.promptsDir === undefined
         ? path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../prompts')

@@ -1,0 +1,13 @@
+[Unit]
+Description=PurpleFlow server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__NODE__ __CHECKOUT__/core/dist/server/main.js --config __CONFIG__
+KillMode=control-group
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

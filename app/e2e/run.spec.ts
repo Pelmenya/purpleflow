@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import type { RunFile } from '@purpleflow/core';
 import type { PurpleFlowBridge } from '../src/shared/ipc';
 import { launch, makeSandbox, quit, type Launched, type Sandbox } from './harness';
 
@@ -42,6 +43,13 @@ function resultOnBranch() {
   return { branch, math: box.git('show', `${branch}:src/math.js`) };
 }
 
+function savedRun(): RunFile {
+  const dir = path.join(box.profile, 'data', 'runs');
+  const files = fs.readdirSync(dir).filter((file) => file.endsWith('.json'));
+  expect(files).toHaveLength(1);
+  return JSON.parse(fs.readFileSync(path.join(dir, files[0]!), 'utf8')) as RunFile;
+}
+
 test('быстрая правка: от задачи до коммита в ветке, рабочая копия не тронута', async () => {
   await startRun(l.page, 'Быстрая правка', 'Добавь функцию mul в src/math.js');
   await accept(l.page).click();
@@ -77,6 +85,25 @@ test('задача с планом: утверждение плана, реал�
   await expect.poll(() => resultOnBranch().math).toContain('mul');
   const prompts = box.calls().map((c) => c.prompt);
   expect(prompts.some((p) => /ревьюер в конвейере PurpleFlow/.test(p))).toBe(true);
+
+  await expect
+    .poll(() => {
+      const run = savedRun();
+      return { status: run.status, commit: run.commit };
+    })
+    .toEqual({ status: 'finished', commit: expect.any(String) });
+  const run = savedRun();
+  expect(run.gates).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ gate: 'gate1', decision: 'approve' }),
+      expect.objectContaining({ gate: 'gate2', decision: 'approve' }),
+    ]),
+  );
+  expect(run.commit).toBe(box.git('rev-parse', resultOnBranch().branch));
+
+  const settings = JSON.parse(fs.readFileSync(path.join(box.profile, 'settings.json'), 'utf8')) as Record<string, unknown>;
+  expect(Object.keys(settings).filter((key) => /server|telegram/i.test(key))).toEqual([]);
+  expect(fs.existsSync(path.join(box.profile, 'server.json'))).toBe(false);
 });
 
 test('агент упал: причина видна в окне, прогон не висит', async () => {
