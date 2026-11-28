@@ -463,14 +463,14 @@ test('поток: истечение между guard и expiresAt не проп
   await assert.rejects(stream.next(), /Поток SSE закрылся до события/);
 });
 
-async function expirationReplayRace(t: TestContext): Promise<Response> {
+async function expirationReplayRace(t: TestContext, flipAt = 2): Promise<Response> {
   const stand = await startTestHost();
   const config = configFor(stand.dataDir, stand.project, stand.settings);
   let now = 0;
   let armed = false;
   let calls = 0;
   const clock = () => {
-    if (armed && ++calls === 2) now = 1_000;
+    if (armed && ++calls === flipAt) now = 1_000;
     return now;
   };
   const sessions = createSessions({ secret: 'секрет владельца', ttlMs: 1_000, now: clock });
@@ -497,6 +497,11 @@ test('поток: истечение между guard и expiresAt не отда
 
 test('поток: истечение с Last-Event-ID не отдаёт буферизованные события', { ...linux, timeout: 10_000 }, async (t) => {
   const response = await expirationReplayRace(t);
+  assert.doesNotMatch(await response.text(), /секретное событие/);
+});
+
+test('поток: истечение после expiresAt, до отправки replay, не отдаёт буферизованные события', { ...linux, timeout: 10_000 }, async (t) => {
+  const response = await expirationReplayRace(t, 3);
   assert.doesNotMatch(await response.text(), /секретное событие/);
 });
 

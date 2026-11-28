@@ -142,6 +142,13 @@ export function createBridgeHandler(
       closeStream(stream);
       return;
     }
+    // Часы читаются один раз и до повтора: срок, истёкший между проверкой сессии и отправкой
+    // буфера, закрывает поток раньше, чем уйдёт хоть одно событие; таймер считается от того же момента.
+    const openedAt = opts.now?.() ?? Date.now();
+    if (expiresAt !== undefined && openedAt >= expiresAt) {
+      closeStream(stream);
+      return;
+    }
 
     const lastEventId = req.headers['last-event-id'];
     if (lastEventId !== undefined) {
@@ -155,7 +162,7 @@ export function createBridgeHandler(
     }
 
     if (expiresAt !== undefined) {
-      const delay = Math.max(0, expiresAt - (opts.now?.() ?? Date.now()));
+      const delay = Math.max(0, expiresAt - openedAt);
       stream.expiration = setTimeout(() => closeStream(stream), delay);
       stream.expiration.unref();
     }
